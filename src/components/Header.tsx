@@ -8,6 +8,7 @@ export default function Header() {
     { href: '#services', label: 'Услуги' },
     { href: '#heavy-machinery', label: 'Тяжёлая техника' },
     { href: '#calculator', label: 'Калькулятор' },
+    { href: '#case-studies', label: 'Кейсы' },
     { href: '#trust', label: 'О компании' },
     { href: '#footer', label: 'Контакты' },
   ]

@@ -5,6 +5,7 @@ import PainSolution from './components/PainSolution'
 import Services from './components/Services'
 import HeavyMachinery from './components/HeavyMachinery'
 import Calculator from './components/Calculator'
+import YouTubeGrid from './components/YouTubeGrid'
 import Trust from './components/Trust'
 import DeliveryMap from './components/DeliveryMap'
 import LeadMagnet from './components/LeadMagnet'
@@ -23,6 +24,7 @@ function App() {
         <Services />
         <HeavyMachinery />
         <Calculator />
+        <YouTubeGrid />
         <Trust />
         <DeliveryMap />
         <LeadMagnet />

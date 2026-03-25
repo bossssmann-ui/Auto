@@ -1,3 +1,5 @@
+import LazyYouTube from './LazyYouTube'
+
 export default function HeavyMachinery() {
   const inspectionPoints = [
     {
@@ -161,6 +163,23 @@ export default function HeavyMachinery() {
                 Включён в расчёт «под ключ». Для юрлиц — возможность возврата НДС.
               </p>
             </div>
+          </div>
+        </div>
+
+        {/* Technical Inspection Video */}
+        <div className="mt-16">
+          <h3 className="text-center text-xl font-bold text-text-primary md:text-2xl">
+            Видеообзор технической инспекции
+          </h3>
+          <p className="mx-auto mt-2 max-w-2xl text-center text-sm text-text-secondary">
+            Посмотрите, как наши инженеры проверяют технику перед покупкой на аукционе
+          </p>
+
+          <div className="mx-auto mt-8 max-w-3xl">
+            <LazyYouTube
+              videoId={import.meta.env.VITE_INSPECTION_VIDEO_ID || 'dQw4w9WgXcQ'}
+              title="Техническая инспекция экскаватора перед покупкой — проверка гидравлики, моточасов и конструкции"
+            />
           </div>
         </div>
 
