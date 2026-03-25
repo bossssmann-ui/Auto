@@ -17,13 +17,14 @@ export default function LeadMagnet() {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-2xl text-center">
           <span className="inline-block rounded-full bg-gold/20 px-4 py-1 text-sm font-semibold text-gold-light">
-            Бесплатно
+            Бесплатно для бизнеса
           </span>
           <h2 className="mt-4 text-2xl font-extrabold text-white sm:text-3xl md:text-4xl">
-            Получите PDF-каталог: 50 лучших авто до 1.5 млн ₽
+            Получите каталог спецтехники с ценами «под ключ»
           </h2>
           <p className="mt-4 text-lg text-blue-200">
-            Актуальные лоты с японских аукционов. Обновляется каждый день.
+            Актуальные лоты экскаваторов, погрузчиков и тракторов с аукционов Японии, Кореи и Китая.
+            С расчётом полной стоимости включая ПСМ, утильсбор и НДС 20%.
           </p>
 
           {!submitted ? (
@@ -50,7 +51,7 @@ export default function LeadMagnet() {
                 type="submit"
                 className="w-full rounded-xl bg-gold px-8 py-4 text-lg font-bold text-primary-dark shadow-lg transition-all hover:-translate-y-0.5 hover:bg-gold-light hover:shadow-xl sm:w-auto"
               >
-                Получить каталог бесплатно
+                Получить каталог техники
               </button>
               <p className="text-xs text-blue-300">
                 Нажимая кнопку, вы соглашаетесь с политикой обработки
@@ -61,7 +62,7 @@ export default function LeadMagnet() {
             <div className="mt-10 rounded-xl bg-white/10 p-8">
               <span className="text-4xl">✅</span>
               <p className="mt-4 text-xl font-bold text-white">
-                Спасибо! Каталог отправлен на ваш телефон.
+                Спасибо! Каталог отправлен. Менеджер свяжется для уточнения деталей.
               </p>
               <p className="mt-2 text-blue-200">
                 Наш менеджер свяжется с вами в ближайшее время.

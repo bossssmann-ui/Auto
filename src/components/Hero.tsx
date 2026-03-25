@@ -1,9 +1,9 @@
 export default function Hero() {
   const stats = [
-    { value: '2500+', label: 'авто доставлено' },
-    { value: '8 лет', label: 'на рынке' },
-    { value: '98%', label: 'довольных клиентов' },
-    { value: 'от 25', label: 'дней доставка' },
+    { value: '2500+', label: 'единиц техники доставлено' },
+    { value: '8 лет', label: 'на рынке импорта' },
+    { value: '0', label: 'скрытых платежей' },
+    { value: 'от 25', label: 'дней — полный цикл' },
   ]
 
   return (
@@ -18,27 +18,28 @@ export default function Hero() {
       </div>
 
       <div className="relative mx-auto max-w-7xl px-4 py-20 sm:px-6 md:py-28 lg:px-8 lg:py-36">
-        <div className="mx-auto max-w-3xl text-center">
+        <div className="mx-auto max-w-4xl text-center">
           <h1 className="text-3xl font-extrabold leading-tight tracking-tight text-white sm:text-4xl md:text-5xl lg:text-6xl">
-            Импорт авто и спецтехники из Японии, Кореи и Китая —{' '}
-            <span className="text-gold-light">под ключ за 25 дней</span>
+            Прогнозируемая поставка коммерческой техники{' '}
+            <span className="text-gold-light">без простоев и скрытых логистических расходов</span>
           </h1>
           <p className="mt-6 text-lg leading-relaxed text-blue-100 md:text-xl">
-            Экономия до 40% от рыночной стоимости в РФ. Полное таможенное
-            оформление. Гарантия юридической чистоты каждого лота.
+            Импорт спецтехники, автомобилей и мототехники из Японии, Кореи и Китая.
+            Полное таможенное оформление — ПСМ, утильсбор, НДС 20%. Фиксированная
+            стоимость «под ключ» в договоре.
           </p>
           <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
             <a
               href="#calculator"
               className="w-full rounded-xl bg-accent px-8 py-4 text-lg font-bold text-white shadow-lg transition-all hover:-translate-y-0.5 hover:bg-accent-light hover:shadow-xl sm:w-auto"
             >
-              Рассчитать стоимость
+              Рассчитать стоимость «под ключ»
             </a>
             <a
-              href="#services"
+              href="#heavy-machinery"
               className="w-full rounded-xl border-2 border-white/30 px-8 py-4 text-lg font-bold text-white transition-all hover:border-white hover:bg-white/10 sm:w-auto"
             >
-              Смотреть каталог аукционов
+              Спецтехника и тяжёлая техника
             </a>
           </div>
         </div>

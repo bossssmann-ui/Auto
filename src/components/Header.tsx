@@ -5,9 +5,8 @@ export default function Header() {
 
   const navLinks = [
     { href: '#hero', label: 'Главная' },
-    { href: '#services', label: 'Автомобили' },
-    { href: '#services', label: 'Мототехника' },
-    { href: '#services', label: 'Спецтехника' },
+    { href: '#services', label: 'Услуги' },
+    { href: '#heavy-machinery', label: 'Тяжёлая техника' },
     { href: '#calculator', label: 'Калькулятор' },
     { href: '#trust', label: 'О компании' },
     { href: '#footer', label: 'Контакты' },

@@ -44,13 +44,13 @@ export default function ExitIntent() {
         {!submitted ? (
           <>
             <div className="text-center">
-              <span className="text-4xl">🎁</span>
+              <span className="text-4xl">📋</span>
               <h2 className="mt-4 text-xl font-extrabold text-primary sm:text-2xl">
-                Подождите! У нас есть специальное предложение
+                Получите расчёт стоимости техники за 30 минут
               </h2>
               <p className="mt-3 text-text-secondary">
-                Оставьте номер телефона и получите персональную подборку авто под
-                ваш бюджет за 30 минут
+                Оставьте контакт — менеджер подготовит персональный расчёт
+                с учётом ПСМ, утильсбора и НДС 20% для вашей единицы техники
               </p>
             </div>
 
@@ -67,7 +67,7 @@ export default function ExitIntent() {
                 type="submit"
                 className="w-full rounded-xl bg-accent px-8 py-4 text-lg font-bold text-white shadow-md transition-all hover:-translate-y-0.5 hover:bg-accent-light hover:shadow-lg"
               >
-                Получить подборку
+                Получить расчёт
               </button>
               <p className="text-center text-xs text-text-secondary">
                 Нажимая кнопку, вы соглашаетесь с политикой обработки

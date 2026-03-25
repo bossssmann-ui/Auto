@@ -3,6 +3,7 @@ import Hero from './components/Hero'
 import AuctionTicker from './components/AuctionTicker'
 import PainSolution from './components/PainSolution'
 import Services from './components/Services'
+import HeavyMachinery from './components/HeavyMachinery'
 import Calculator from './components/Calculator'
 import Trust from './components/Trust'
 import DeliveryMap from './components/DeliveryMap'
@@ -20,6 +21,7 @@ function App() {
         <AuctionTicker />
         <PainSolution />
         <Services />
+        <HeavyMachinery />
         <Calculator />
         <Trust />
         <DeliveryMap />
