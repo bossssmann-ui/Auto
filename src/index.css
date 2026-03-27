@@ -14,6 +14,21 @@
   --color-text-secondary: #4a5568;
   --font-heading: 'Inter', system-ui, -apple-system, sans-serif;
   --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+
+  /* Triple-Hub Design System — B2B Heavy Machinery */
+  --color-hub-b2b: #1F2937;
+  --color-hub-b2b-light: #374151;
+  --color-hub-b2b-accent: #FACC15;
+
+  /* Triple-Hub Design System — B2C Passenger Cars */
+  --color-hub-b2c: #FFFFFF;
+  --color-hub-b2c-light: #F3F4F6;
+  --color-hub-b2c-accent: #2563EB;
+
+  /* Triple-Hub Design System — Moto Hub */
+  --color-hub-moto: #111827;
+  --color-hub-moto-light: #1F2937;
+  --color-hub-moto-accent: #DC2626;
 }
 
 html {
