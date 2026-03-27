@@ -145,7 +145,7 @@ export async function pushToAmoCRM(lead: LeadPayload): Promise<void> {
     'Content-Type': 'application/json',
   }
 
-  const baseUrl = `https://${encodeURIComponent(domain)}`
+  const baseUrl = `https://${domain}`
 
   // 1. Create Contact
   const contactPayload = [
