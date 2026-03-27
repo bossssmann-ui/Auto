@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { submitLead } from '../api'
 
 export default function ExitIntent() {
   const [show, setShow] = useState(false)
@@ -20,9 +21,14 @@ export default function ExitIntent() {
     return () => document.removeEventListener('mouseleave', handleMouseLeave)
   }, [])
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (phone.trim()) {
+      try {
+        await submitLead({ name: 'Не указано', phone, source: 'exit-intent' })
+      } catch {
+        // Silently continue
+      }
       setSubmitted(true)
     }
   }
@@ -50,7 +56,7 @@ export default function ExitIntent() {
               </h2>
               <p className="mt-3 text-text-secondary">
                 Оставьте контакт — менеджер подготовит персональный расчёт
-                с учётом ПСМ, утильсбора и НДС 20% для вашей единицы техники
+                с учётом ПСМ, утильсбора и НДС 22% для вашей единицы техники
               </p>
             </div>
 

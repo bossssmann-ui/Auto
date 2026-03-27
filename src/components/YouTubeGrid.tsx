@@ -75,7 +75,7 @@ export default function YouTubeGrid() {
             Видео
           </span>
           <h2 className="mt-4 text-2xl font-extrabold text-primary sm:text-3xl md:text-4xl">
-            Кейсы и реальные поставки
+            Последние отгрузки
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-text-secondary">
             Видеоотчёты с аукционов, технических инспекций и доставок техники нашим

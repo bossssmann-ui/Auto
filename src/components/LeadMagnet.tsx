@@ -1,13 +1,19 @@
 import { useState } from 'react'
+import { submitLead } from '../api'
 
 export default function LeadMagnet() {
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [submitted, setSubmitted] = useState(false)
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (name.trim() && phone.trim()) {
+      try {
+        await submitLead({ name, phone, source: 'lead-magnet' })
+      } catch {
+        // Silently continue
+      }
       setSubmitted(true)
     }
   }
@@ -24,7 +30,7 @@ export default function LeadMagnet() {
           </h2>
           <p className="mt-4 text-lg text-blue-200">
             Актуальные лоты экскаваторов, погрузчиков и тракторов с аукционов Японии, Кореи и Китая.
-            С расчётом полной стоимости включая ПСМ, утильсбор и НДС 20%.
+            С расчётом полной стоимости включая ПСМ, утильсбор и НДС 22%.
           </p>
 
           {!submitted ? (

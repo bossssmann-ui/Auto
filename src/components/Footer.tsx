@@ -1,9 +1,9 @@
 export default function Footer() {
   const navLinks = [
-    { href: '#hero', label: 'Главная' },
-    { href: '#services', label: 'Услуги' },
+    { href: '#services', label: 'Авто' },
+    { href: '#heavy-machinery', label: 'Спецтехника' },
     { href: '#calculator', label: 'Калькулятор' },
-    { href: '#trust', label: 'О компании' },
+    { href: '#trust', label: 'Гарантии' },
     { href: '#delivery', label: 'Доставка' },
     { href: '#lead', label: 'Каталог' },
   ]
@@ -15,14 +15,14 @@ export default function Footer() {
           {/* Company info */}
           <div className="lg:col-span-2">
             <span className="text-2xl font-extrabold text-white">
-              СПЕЦТЕХМАШ
+              Тихоокеанская Звезда
             </span>
             <p className="mt-4 max-w-md text-sm leading-relaxed">
               Импорт автомобилей, мототехники и спецтехники из Японии, Кореи и
-              Китая. Работаем с 2016 года. Полный цикл под ключ.
+              Китая. Собственная ТЛК. Работаем с НДС 22%. Полный цикл под ключ.
             </p>
             <div className="mt-6 space-y-2 text-sm">
-              <p>ООО &laquo;Спецтехмаш&raquo;</p>
+              <p>ООО &laquo;Тихоокеанская Звезда&raquo;</p>
               <p>ИНН: 2536123456</p>
               <p>ОГРН: 1022502123456</p>
               <p>690001, г. Владивосток, ул. Алеутская, д. 45, офис 301</p>
@@ -96,7 +96,7 @@ export default function Footer() {
         </div>
 
         <div className="mt-12 border-t border-white/10 pt-8 text-center text-xs text-blue-300">
-          © {new Date().getFullYear()} ООО &laquo;Спецтехмаш&raquo;. Все права
+          © {new Date().getFullYear()} ООО &laquo;Тихоокеанская Звезда&raquo;. Все права
           защищены.
         </div>
       </div>
