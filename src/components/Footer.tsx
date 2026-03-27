@@ -11,18 +11,18 @@ export default function Footer() {
   return (
     <footer id="footer" className="bg-primary-dark pt-16 pb-8 text-blue-200">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <div className="grid gap-10 md:grid-cols-3 lg:grid-cols-4">
+        <div className="grid gap-10 md:grid-cols-3 lg:grid-cols-5">
           {/* Company info */}
           <div className="lg:col-span-2">
             <span className="text-2xl font-extrabold text-white">
-              Тихоокеанская Звезда
+              СпецТехМаш
             </span>
             <p className="mt-4 max-w-md text-sm leading-relaxed">
               Импорт автомобилей, мототехники и спецтехники из Японии, Кореи и
               Китая. Собственная ТЛК. Работаем с НДС 22%. Полный цикл под ключ.
             </p>
             <div className="mt-6 space-y-2 text-sm">
-              <p>ООО &laquo;Тихоокеанская Звезда&raquo;</p>
+              <p>ООО &laquo;СпецТехМаш&raquo;</p>
               <p>ИНН: 2536123456</p>
               <p>ОГРН: 1022502123456</p>
               <p>690001, г. Владивосток, ул. Алеутская, д. 45, офис 301</p>
@@ -46,6 +46,25 @@ export default function Footer() {
                 </li>
               ))}
             </ul>
+          </div>
+
+          {/* Logistics partner */}
+          <div>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-white">
+              Наш логистический партнёр
+            </h3>
+            <p className="mt-4 text-sm leading-relaxed">
+              ТЛК &laquo;Тихоокеанская Звезда&raquo; — собственная транспортно-логистическая
+              компания, обеспечивающая доставку по всей России.
+            </p>
+            <a
+              href="https://pacific-star-logistics.ru"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-block text-xs text-blue-300 underline decoration-blue-300/30 transition-colors hover:text-white hover:decoration-white/50"
+            >
+              pacific-star-logistics.ru
+            </a>
           </div>
 
           {/* Contacts */}
@@ -96,7 +115,7 @@ export default function Footer() {
         </div>
 
         <div className="mt-12 border-t border-white/10 pt-8 text-center text-xs text-blue-300">
-          © {new Date().getFullYear()} ООО &laquo;Тихоокеанская Звезда&raquo;. Все права
+          © {new Date().getFullYear()} ООО &laquo;СпецТехМаш&raquo;. Все права
           защищены.
         </div>
       </div>

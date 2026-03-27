@@ -632,10 +632,9 @@ export default function Calculator() {
                   className="mt-6 rounded-xl border-2 border-accent/30 bg-accent/5 p-5"
                 >
                   <p className="text-sm font-semibold text-text-primary">
-                    Получите точную PDF-смету с учётом утильсбора и доставки нашим тралом до вашего города.
-                  </p>
-                  <p className="mt-1 text-xs text-text-secondary">
-                    Введите номер WhatsApp. Отвечаем за 1 час.
+                    Получите PDF-смету от инженеров СпецТехМаш. В расчёт будет
+                    включена точная стоимость доставки до вашей двери тралами нашей
+                    ТЛК &laquo;Тихоокеанская Звезда&raquo;. Введите WhatsApp.
                   </p>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <input

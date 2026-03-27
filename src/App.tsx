@@ -8,6 +8,7 @@ import Calculator from './components/Calculator'
 import YouTubeGrid from './components/YouTubeGrid'
 import Trust from './components/Trust'
 import DeliveryMap from './components/DeliveryMap'
+import LogisticsProof from './components/LogisticsProof'
 import LeadMagnet from './components/LeadMagnet'
 import Footer from './components/Footer'
 import FloatingWidget from './components/FloatingWidget'
@@ -27,6 +28,7 @@ function App() {
         <YouTubeGrid />
         <Trust />
         <DeliveryMap />
+        <LogisticsProof />
         <LeadMagnet />
       </main>
       <Footer />
