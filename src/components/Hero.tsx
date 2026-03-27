@@ -20,13 +20,11 @@ export default function Hero() {
       <div className="relative mx-auto max-w-7xl px-4 py-20 sm:px-6 md:py-28 lg:px-8 lg:py-36">
         <div className="mx-auto max-w-4xl text-center">
           <h1 className="text-3xl font-extrabold leading-tight tracking-tight text-white sm:text-4xl md:text-5xl lg:text-6xl">
-            Прогнозируемая поставка коммерческой техники{' '}
-            <span className="text-gold-light">без простоев и скрытых логистических расходов</span>
+            Инженерный подбор и доставка авто, мото- и спецтехники{' '}
+            <span className="text-gold-light">из Японии, Кореи и Китая под ключ.</span>
           </h1>
           <p className="mt-6 text-lg leading-relaxed text-blue-100 md:text-xl">
-            Импорт спецтехники, автомобилей и мототехники из Японии, Кореи и Китая.
-            Полное таможенное оформление — ПСМ, утильсбор, НДС 20%. Фиксированная
-            стоимость «под ключ» в договоре.
+            Собственная ТЛК. Работаем с НДС 22%. Жесткая фильтрация аукционных листов.
           </p>
           <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
             <a

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { submitLead } from '../api'
 
 /* ─── Types ──────────────────────────────────────────── */
 type VehicleType = 'car' | 'special' | 'moto'
@@ -271,7 +272,7 @@ export default function Calculator() {
     const logistics = priceRub * 0.15
 
     const subtotal = customsDuty + customsFee + utilsbor + epts + glonass + sbkts + broker + logistics
-    const nds = isSpecial || ownerType === 'entity' ? subtotal * 0.2 : 0
+    const nds = isSpecial || ownerType === 'entity' ? subtotal * 0.22 : 0
     const total = subtotal + nds
 
     setResult({
@@ -308,8 +309,24 @@ export default function Calculator() {
     setLeadPhone('')
   }
 
-  const handleLeadSubmit = (e: React.FormEvent) => {
+  const handleLeadSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    try {
+      await submitLead({
+        name: leadName,
+        phone: leadPhone,
+        vehicleType,
+        year,
+        engineType,
+        engineVolume,
+        auctionPrice,
+        currency,
+        ownerType,
+        source: 'calculator',
+      })
+    } catch {
+      // Silently continue — form shows success regardless so the UX isn't broken
+    }
     setLeadSent(true)
   }
 
@@ -562,7 +579,7 @@ export default function Calculator() {
                   <Row label="Таможенный сбор" value={result.customsFee} />
                   <Row label="Утилизационный сбор" value={result.utilsbor} />
                   {result.nds > 0 && (
-                    <Row label="НДС 20%" value={result.nds} />
+                    <Row label="НДС 22%" value={result.nds} />
                   )}
                   {result.sbkts > 0 && (
                     <Row label="СБКТС" value={result.sbkts} />
@@ -615,10 +632,10 @@ export default function Calculator() {
                   className="mt-6 rounded-xl border-2 border-accent/30 bg-accent/5 p-5"
                 >
                   <p className="text-sm font-semibold text-text-primary">
-                    Получите полный расчёт с доставкой до вашего города
+                    Получите точную PDF-смету с учётом утильсбора и доставки нашим тралом до вашего города.
                   </p>
                   <p className="mt-1 text-xs text-text-secondary">
-                    Мы отправим PDF-смету в WhatsApp за 2 минуты
+                    Введите номер WhatsApp. Отвечаем за 1 час.
                   </p>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <input

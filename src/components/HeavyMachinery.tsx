@@ -64,7 +64,7 @@ export default function HeavyMachinery() {
           <p className="mx-auto mt-4 max-w-3xl text-text-secondary">
             Импорт экскаваторов, погрузчиков, бульдозеров и тракторов из Японии, Кореи и Китая.
             Каждая единица проходит техническую инспекцию до покупки на аукционе.
-            Полное таможенное оформление с получением ПСМ, оплатой утильсбора и НДС 20%.
+            Полное таможенное оформление с получением ПСМ, оплатой утильсбора и НДС 22%.
           </p>
         </div>
 
@@ -157,7 +157,7 @@ export default function HeavyMachinery() {
               </p>
             </div>
             <div className="rounded-xl bg-white p-5 shadow-sm sm:col-span-2 lg:col-span-1">
-              <div className="text-2xl font-extrabold text-accent">НДС 20%</div>
+              <div className="text-2xl font-extrabold text-accent">НДС 22%</div>
               <p className="mt-2 text-sm text-text-secondary">
                 Налог на добавленную стоимость при ввозе коммерческой техники.
                 Включён в расчёт «под ключ». Для юрлиц — возможность возврата НДС.
