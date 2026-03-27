@@ -19,7 +19,7 @@ export default function Header() {
           {/* Logo */}
           <a href="#hero" className="flex items-center gap-2">
             <span className="text-lg font-extrabold tracking-tight text-primary md:text-xl">
-              Тихоокеанская Звезда
+              СпецТехМаш
             </span>
           </a>
 

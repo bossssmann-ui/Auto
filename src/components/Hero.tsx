@@ -24,7 +24,8 @@ export default function Hero() {
             <span className="text-gold-light">из Японии, Кореи и Китая под ключ.</span>
           </h1>
           <p className="mt-6 text-lg leading-relaxed text-blue-100 md:text-xl">
-            Собственная ТЛК. Работаем с НДС 22%. Жесткая фильтрация аукционных листов.
+            СпецТехМаш — ваш инженерный интегратор по импорту техники. Доставку
+            по РФ осуществляет наша собственная ТЛК &laquo;Тихоокеанская Звезда&raquo;.
           </p>
           <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
             <a
