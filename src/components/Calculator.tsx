@@ -632,8 +632,8 @@ export default function Calculator() {
                   className="mt-6 rounded-xl border-2 border-accent/30 bg-accent/5 p-5"
                 >
                   <p className="text-sm font-semibold text-text-primary">
-                    Получите PDF-смету от инженеров СпецТехМаш. В расчёт будет
-                    включена точная стоимость доставки до вашей двери тралами нашей
+                    Получите точную PDF-смету от инженеров СпецТехМаш. В расчёт будет
+                    включена доставка тралами/автовозами нашей
                     ТЛК &laquo;Тихоокеанская Звезда&raquo;. Введите WhatsApp.
                   </p>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">

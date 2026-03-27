@@ -1,19 +1,32 @@
+/**
+ * Logistics Trust Section — "Логистика без посредников".
+ *
+ * Psychological reasoning:
+ * — Addresses the #1 fear of high-value cargo buyers: handing expensive equipment
+ *   to unreliable third-party drivers. Emphasizes own fleet and full control.
+ * — "Тихоокеанская Звезда" branding reinforces the unfair advantage of in-house logistics.
+ */
 export default function LogisticsProof() {
   const advantages = [
     {
       icon: '🚛',
-      title: 'Собственный автопарк тралов',
-      text: 'Доставка по всей России без субподрядчиков. Полный контроль сроков и сохранности груза.',
+      title: 'Собственный автопарк тралов и автовозов',
+      text: 'Ни одна единица техники не передаётся случайным перевозчикам. Доставка по всей России — только силами нашей ТЛК «Тихоокеанская Звезда». Полный контроль сроков и сохранности груза.',
     },
     {
       icon: '📡',
-      title: 'GPS-отслеживание',
-      text: 'Каждый трал оснащён GPS-трекером. Вы видите, где находится ваша техника в режиме реального времени.',
+      title: 'GPS-отслеживание в реальном времени',
+      text: 'Каждый трал и автовоз оснащён GPS-трекером. Вы видите, где находится ваша техника 24/7. Никаких «потерянных» грузов и неизвестных сроков.',
     },
     {
       icon: '📋',
-      title: 'Страхование груза',
-      text: 'Каждая единица техники застрахована на полную стоимость на всём пути от порта до вашей площадки.',
+      title: 'Страхование на полную стоимость',
+      text: 'Каждая единица техники застрахована на 100% стоимости на всём пути — от порта до вашей площадки. Единый договор, единая ответственность.',
+    },
+    {
+      icon: '👷',
+      title: 'Профессиональные водители',
+      text: 'Штатные водители с опытом перевозки тяжёлой и спецтехники. Мы не ищем водителей на Авито и не доверяем дорогостоящий груз случайным людям.',
     },
   ]
 
@@ -26,11 +39,11 @@ export default function LogisticsProof() {
         <p className="mx-auto mt-4 max-w-3xl text-center text-text-secondary">
           СпецТехМаш гарантирует безопасность доставки, потому что мы владеем
           собственной транспортно-логистической компанией &laquo;Тихоокеанская
-          Звезда&raquo; (Pacific&nbsp;Star). Это исключает посредников, снижает
-          стоимость и обеспечивает полный контроль на каждом этапе.
+          Звезда&raquo; (Pacific&nbsp;Star). Мы не передаём дорогостоящий груз
+          третьим лицам — каждый этап под нашим контролем.
         </p>
 
-        <div className="mt-12 grid gap-8 md:grid-cols-3">
+        <div className="mt-12 grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
           {advantages.map((item) => (
             <div
               key={item.title}
@@ -47,11 +60,14 @@ export default function LogisticsProof() {
           ))}
         </div>
 
-        <div className="mx-auto mt-12 max-w-2xl rounded-2xl bg-primary/5 p-6 text-center">
-          <p className="text-sm leading-relaxed text-text-primary">
+        {/* Strong closing statement — addresses the "Avito drivers" fear directly */}
+        <div className="mx-auto mt-12 max-w-3xl rounded-2xl bg-primary/5 p-6 md:p-8">
+          <p className="text-center text-sm font-semibold leading-relaxed text-text-primary md:text-base">
             Вся техника, приобретённая через СпецТехМаш, доставляется
             исключительно силами нашей ТЛК &laquo;Тихоокеанская Звезда&raquo;.
-            Единый договор, единая ответственность, прозрачные сроки.
+            Мы не нанимаем случайных водителей с Авито и не доверяем
+            перевозку экскаваторов и автомобилей стоимостью в миллионы рублей
+            неизвестным субподрядчикам. Единый договор — единая ответственность.
           </p>
         </div>
       </div>

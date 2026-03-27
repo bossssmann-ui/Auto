@@ -4,6 +4,8 @@ import AuctionTicker from './components/AuctionTicker'
 import PainSolution from './components/PainSolution'
 import Services from './components/Services'
 import HeavyMachinery from './components/HeavyMachinery'
+import ProductExcavator from './components/ProductExcavator'
+import ProductCar from './components/ProductCar'
 import Calculator from './components/Calculator'
 import YouTubeGrid from './components/YouTubeGrid'
 import Trust from './components/Trust'
@@ -24,6 +26,8 @@ function App() {
         <PainSolution />
         <Services />
         <HeavyMachinery />
+        <ProductExcavator />
+        <ProductCar />
         <Calculator />
         <YouTubeGrid />
         <Trust />
