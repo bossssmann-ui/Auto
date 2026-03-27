@@ -38,6 +38,7 @@ export default function Hero() {
       btnClass: 'bg-hub-b2b-accent text-hub-b2b hover:bg-yellow-300',
       textColor: 'text-white',
       subColor: 'text-gray-300',
+      accentText: 'text-hub-b2b-accent',
       icon: '🏗️',
     },
     {
@@ -56,6 +57,7 @@ export default function Hero() {
       btnClass: 'bg-hub-b2c-accent text-white hover:bg-blue-700',
       textColor: 'text-gray-900',
       subColor: 'text-gray-600',
+      accentText: 'text-hub-b2c-accent',
       icon: '🚗',
     },
     {
@@ -74,6 +76,7 @@ export default function Hero() {
       btnClass: 'bg-hub-moto-accent text-white hover:bg-red-700',
       textColor: 'text-white',
       subColor: 'text-gray-400',
+      accentText: 'text-hub-moto-accent',
       icon: '🏍️',
     },
   ]
@@ -109,9 +112,7 @@ export default function Hero() {
               <div className="relative z-10 mx-auto max-w-md">
                 <div className="text-4xl">{panel.icon}</div>
                 <span
-                  className={`mt-3 inline-block text-xs font-bold uppercase tracking-widest ${
-                    panel.id === 'b2c' ? 'text-hub-b2c-accent' : panel.subColor
-                  }`}
+                  className={`mt-3 inline-block text-xs font-bold uppercase tracking-widest ${panel.accentText}`}
                 >
                   {panel.label}
                 </span>
@@ -120,7 +121,7 @@ export default function Hero() {
                 >
                   {panel.heading}
                   <br />
-                  <span className={panel.id === 'b2c' ? 'text-hub-b2c-accent' : panel.id === 'b2b' ? 'text-hub-b2b-accent' : 'text-hub-moto-accent'}>
+                  <span className={panel.accentText}>
                     {panel.subheading}
                   </span>
                 </h2>
