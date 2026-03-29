@@ -131,15 +131,62 @@ export async function sendTelegramNotification(lead: LeadPayload): Promise<void>
 
 /* ─── amoCRM ───────────────────────────────────────────── */
 
+import { getValidAmoToken, refreshAccessToken } from './amocrm.js'
+
+/**
+ * Push a lead to amoCRM (create Contact + Lead).
+ *
+ * Uses OAuth 2.0 tokens managed by `amocrm.ts`.
+ * If the API returns 401 Unauthorized, the token is refreshed once and
+ * the entire request is retried.
+ */
 export async function pushToAmoCRM(lead: LeadPayload): Promise<void> {
   const domain = process.env.AMOCRM_DOMAIN
-  const accessToken = process.env.AMOCRM_ACCESS_TOKEN
 
-  if (!domain || !accessToken) {
-    console.warn('[amoCRM] AMOCRM_DOMAIN or AMOCRM_ACCESS_TOKEN not configured – skipping')
+  if (!domain) {
+    console.warn('[amoCRM] AMOCRM_DOMAIN not configured – skipping')
     return
   }
 
+  let accessToken: string
+  try {
+    accessToken = await getValidAmoToken()
+  } catch (err) {
+    console.warn('[amoCRM]', err instanceof Error ? err.message : err)
+    return
+  }
+
+  try {
+    await pushToAmoCRMWithToken(lead, domain, accessToken)
+  } catch (err) {
+    // If we got a 401, refresh once and retry
+    if (err instanceof AmoCRMUnauthorizedError) {
+      console.log('[amoCRM] Got 401, refreshing token and retrying…')
+      try {
+        const refreshed = await refreshAccessToken()
+        await pushToAmoCRMWithToken(lead, domain, refreshed.access_token)
+      } catch (retryErr) {
+        console.error('[amoCRM] Retry after token refresh failed:', retryErr)
+        throw retryErr
+      }
+    } else {
+      throw err
+    }
+  }
+}
+
+class AmoCRMUnauthorizedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'AmoCRMUnauthorizedError'
+  }
+}
+
+async function pushToAmoCRMWithToken(
+  lead: LeadPayload,
+  domain: string,
+  accessToken: string,
+): Promise<void> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
     'Content-Type': 'application/json',
@@ -165,6 +212,10 @@ export async function pushToAmoCRM(lead: LeadPayload): Promise<void> {
     headers,
     body: JSON.stringify(contactPayload),
   })
+
+  if (contactRes.status === 401) {
+    throw new AmoCRMUnauthorizedError('Unauthorized when creating contact')
+  }
 
   if (!contactRes.ok) {
     const errText = await contactRes.text()
@@ -216,6 +267,10 @@ export async function pushToAmoCRM(lead: LeadPayload): Promise<void> {
     headers,
     body: JSON.stringify(leadPayload),
   })
+
+  if (leadRes.status === 401) {
+    throw new AmoCRMUnauthorizedError('Unauthorized when creating lead')
+  }
 
   if (!leadRes.ok) {
     const errText = await leadRes.text()
