@@ -53,7 +53,10 @@ npm install express cors dotenv
 
 ## 5. Создание файла сервера
 
-Создайте файл `server.js`:
+Создайте файл `server.js`.  
+> ℹ️ В основном репозитории сервер написан на TypeScript (`server/index.ts`).
+> Ниже — упрощённая JavaScript-версия (CommonJS), которая не требует сборки
+> и запускается напрямую через `node server.js`.
 
 ```bash
 nano server.js
@@ -244,8 +247,8 @@ nano .env
 
 ```env
 # Telegram
-TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
-TELEGRAM_CHAT_ID=-1001234567890
+TELEGRAM_BOT_TOKEN=ваш_токен_от_BotFather
+TELEGRAM_CHAT_ID=ваш_chat_id
 
 # amoCRM (заполнить позже, когда будет готова интеграция)
 AMOCRM_DOMAIN=

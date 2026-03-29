@@ -27,11 +27,14 @@ app.use(express.json({ limit: '1mb' }))
 // ── Routes ───────────────────────────────────────────────
 app.post('/api/lead', async (req, res) => {
   try {
-    const result = await handleLead(req.body as unknown)
+    const result = await handleLead(req.body)
     res.status(200).json(result)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Внутренняя ошибка сервера'
-    res.status(500).json({ success: false, message })
+    const isValidation = message === 'Укажите ваше имя'
+      || message === 'Укажите номер телефона'
+      || message === 'Некорректный формат данных'
+    res.status(isValidation ? 400 : 500).json({ success: false, message })
   }
 })
 
