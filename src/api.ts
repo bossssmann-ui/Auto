@@ -10,6 +10,7 @@ export interface LeadData {
   auctionPrice?: string
   currency?: string
   ownerType?: string
+  city?: string
   source?: string
 }
 

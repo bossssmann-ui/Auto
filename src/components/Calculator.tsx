@@ -22,7 +22,6 @@ interface CalcResult {
   epts: number
   glonass: number
   broker: number
-  logistics: number
   total: number
 }
 
@@ -212,6 +211,7 @@ export default function Calculator() {
   const [auctionPrice, setAuctionPrice] = useState('')
   const [currency, setCurrency] = useState<'USD' | 'JPY' | 'EUR' | 'CNY'>('USD')
   const [ownerType, setOwnerType] = useState<OwnerType>('entity')
+  const [city, setCity] = useState('')
 
   // Step 4
   const [result, setResult] = useState<CalcResult | null>(null)
@@ -268,10 +268,7 @@ export default function Calculator() {
     const sbkts = isSpecial ? 0 : SBKTS_FEE
     const broker = BROKER_FEE
 
-    // Logistics estimate (hidden behind lead wall)
-    const logistics = priceRub * 0.15
-
-    const subtotal = customsDuty + customsFee + utilsbor + epts + glonass + sbkts + broker + logistics
+    const subtotal = customsDuty + customsFee + utilsbor + epts + glonass + sbkts + broker
     const nds = isSpecial || ownerType === 'entity' ? subtotal * 0.22 : 0
     const total = subtotal + nds
 
@@ -284,7 +281,6 @@ export default function Calculator() {
       epts: Math.round(epts),
       glonass: Math.round(glonass),
       broker: Math.round(broker),
-      logistics: Math.round(logistics),
       total: Math.round(total),
     })
   }, [auctionPrice, engineVolume, year, vehicleType, ownerType, engineType, currency, rates])
@@ -307,6 +303,7 @@ export default function Calculator() {
     setLeadSent(false)
     setLeadName('')
     setLeadPhone('')
+    setCity('')
   }
 
   const handleLeadSubmit = async (e: React.FormEvent) => {
@@ -322,6 +319,7 @@ export default function Calculator() {
         auctionPrice,
         currency,
         ownerType,
+        city,
         source: 'calculator',
       })
     } catch {
@@ -333,7 +331,10 @@ export default function Calculator() {
   const canProceedStep2 =
     year.length === 4 &&
     (parseFloat(engineVolume) > 0 || engineType === 'electric') &&
-    parseFloat(auctionPrice) > 0
+    parseFloat(auctionPrice) > 0 &&
+    city.trim().length > 0
+
+  const isPhoneValid = (leadPhone.match(/\d/g) ?? []).length >= 11
 
   /* ── Render ── */
   return (
@@ -524,6 +525,20 @@ export default function Calculator() {
                     <option value="CNY">¥ CNY</option>
                   </select>
                 </div>
+
+                {/* City */}
+                <div className="md:col-span-2">
+                  <label className="mb-1.5 block text-sm font-semibold text-text-primary">
+                    Город доставки по РФ
+                  </label>
+                  <input
+                    type="text"
+                    value={city}
+                    onChange={(e) => setCity(e.target.value)}
+                    placeholder="Например, Москва"
+                    className="w-full rounded-lg border border-surface-dark bg-surface px-4 py-3 text-text-primary placeholder:text-text-secondary/50 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
+                  />
+                </div>
               </div>
 
               {/* Exchange rate hint */}
@@ -593,20 +608,14 @@ export default function Calculator() {
                   )}
                   <Row label="Таможенный брокер" value={result.broker} />
 
-                  {/* Logistics — hidden behind lead wall */}
+                  {/* Logistics — individual calculation */}
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-text-secondary">
                       Логистика до вашего города
                     </span>
-                    {leadSent ? (
-                      <span className="font-medium text-text-primary">
-                        {formatRub(result.logistics)}
-                      </span>
-                    ) : (
-                      <span className="rounded bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
-                        после заявки
-                      </span>
-                    )}
+                    <span className="font-medium text-accent">
+                      Индивидуальный расчёт
+                    </span>
                   </div>
 
                   {/* Total */}
@@ -656,7 +665,8 @@ export default function Calculator() {
                   </div>
                   <button
                     type="submit"
-                    className="mt-4 w-full rounded-xl bg-accent px-8 py-3.5 font-bold text-white shadow-md transition-all hover:-translate-y-0.5 hover:bg-accent-light hover:shadow-lg"
+                    disabled={!isPhoneValid}
+                    className="mt-4 w-full rounded-xl bg-accent px-8 py-3.5 font-bold text-white shadow-md transition-all hover:-translate-y-0.5 hover:bg-accent-light hover:shadow-lg disabled:opacity-50 disabled:hover:translate-y-0"
                   >
                     Отправить полный расчёт в WhatsApp
                   </button>
