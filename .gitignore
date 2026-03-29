@@ -16,6 +16,9 @@ dist-server
 # Environment variables
 .env
 
+# amoCRM OAuth tokens (contains secrets)
+amocrm_tokens.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
