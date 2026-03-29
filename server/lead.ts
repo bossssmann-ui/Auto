@@ -167,6 +167,7 @@ export async function pushToAmoCRM(lead: LeadPayload): Promise<void> {
         await pushToAmoCRMWithToken(lead, domain, refreshed.access_token)
       } catch (retryErr) {
         console.error('[amoCRM] Retry after token refresh failed:', retryErr)
+        throw retryErr
       }
     } else {
       throw err

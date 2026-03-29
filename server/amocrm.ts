@@ -13,7 +13,8 @@
  */
 
 import { readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /* ─── Types ────────────────────────────────────────────── */
 
@@ -33,7 +34,8 @@ interface AmoCRMOAuthResponse {
 /* ─── Constants ────────────────────────────────────────── */
 
 /** Path to the token storage file (project root). */
-const TOKENS_PATH = join(import.meta.dirname ?? '.', '..', 'amocrm_tokens.json')
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const TOKENS_PATH = join(__dirname, '..', 'amocrm_tokens.json')
 
 /** Refresh the token 5 minutes before it actually expires. */
 const EXPIRY_BUFFER_MS = 5 * 60 * 1000

@@ -39,6 +39,11 @@ app.post('/api/lead', async (req, res) => {
   }
 })
 
+// ── Rate limiter for auth endpoint ────────────────────────
+const AUTH_RATE_LIMIT_WINDOW_MS = 60 * 1000 // 1 minute
+const AUTH_RATE_LIMIT_MAX = 5 // max requests per window
+const authRequestTimestamps: number[] = []
+
 /**
  * Exchange an authorization code for the initial amoCRM token pair.
  *
@@ -49,6 +54,17 @@ app.post('/api/lead', async (req, res) => {
  * an integration. See docs/amocrm-setup.md for step-by-step instructions.
  */
 app.get('/api/amocrm/auth', async (req, res) => {
+  // Simple rate limiting
+  const now = Date.now()
+  while (authRequestTimestamps.length > 0 && authRequestTimestamps[0]! < now - AUTH_RATE_LIMIT_WINDOW_MS) {
+    authRequestTimestamps.shift()
+  }
+  if (authRequestTimestamps.length >= AUTH_RATE_LIMIT_MAX) {
+    res.status(429).json({ success: false, message: 'Слишком много запросов. Попробуйте позже.' })
+    return
+  }
+  authRequestTimestamps.push(now)
+
   const code = req.query.code
   if (!code || typeof code !== 'string') {
     res.status(400).json({ success: false, message: 'Параметр "code" обязателен.' })
