@@ -11,19 +11,28 @@ const bot = new Telegraf(token);
 
 // /start command — greets the user
 bot.start((ctx) => {
-  const name = ctx.from?.first_name ?? "друг";
   ctx.reply(
-    `Привет, ${name}! 👋\n\n` +
-      "Я — AI-менеджер на стадии обучения. " +
-      "Скоро я смогу отвечать на ваши вопросы с помощью искусственного интеллекта.\n\n" +
-      "А пока — просто напишите мне что-нибудь, и я повторю ваше сообщение. 🤖",
+    "Привет! Я ИИ-менеджер СпецТехМаш. Сейчас я прохожу обучение, " +
+      "но скоро смогу проконсультировать вас по любым вопросам импорта авто и спецтехники.",
+  );
+});
+
+// /help command — placeholder
+bot.help((ctx) => {
+  ctx.reply(
+    "Доступные команды:\n" +
+      "/start — начать диалог\n" +
+      "/help — показать справку\n\n" +
+      "Просто напишите ваш вопрос, и я постараюсь помочь!",
   );
 });
 
 // Text message handler — echo placeholder for future AI integration
 bot.on("text", (ctx) => {
   const userText = ctx.message.text;
-  ctx.reply(`Вы написали: ${userText}`);
+  ctx.reply(
+    `Я получил ваше сообщение: ${userText}. (Здесь скоро будет ответ от нейросети)`,
+  );
 });
 
 // Global error handler — log and continue
