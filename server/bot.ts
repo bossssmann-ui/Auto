@@ -11,7 +11,7 @@ const bot = new Telegraf(token);
 
 // /start command — greets the user
 bot.start((ctx) => {
-  const name = ctx.from.first_name ?? "друг";
+  const name = ctx.from?.first_name ?? "друг";
   ctx.reply(
     `Привет, ${name}! 👋\n\n` +
       "Я — AI-менеджер на стадии обучения. " +
