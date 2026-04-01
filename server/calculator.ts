@@ -56,6 +56,12 @@ const FIXED_FEES_RUB = 185_000;
 /** Export tax rate applied in Japan */
 const EXPORT_TAX_RATE = 0.10;
 
+/** Volume threshold (cm³) above which personal imports are taxed at commercial rate */
+const COMMERCIAL_VOLUME_THRESHOLD_CM3 = 3000;
+
+/** Precision multiplier for rounding exchange rates to 4 decimal places */
+const RATE_PRECISION = 10_000;
+
 // ── CBR Exchange Rates ─────────────────────────────────────────────────────────
 
 interface CbrCurrency {
@@ -177,7 +183,7 @@ function calcRecyclingFee(
 ): number {
   if (vehicleType === 'moto') return 0;
 
-  const isCommercial = isLegalEntity || isForResale || volumeCm3 >= 3000;
+  const isCommercial = isLegalEntity || isForResale || volumeCm3 >= COMMERCIAL_VOLUME_THRESHOLD_CM3;
 
   if (isCommercial) {
     return commercialRecyclingFee(volumeCm3, ageYears);
@@ -204,16 +210,11 @@ function commercialRecyclingFee(volumeCm3: number, ageYears: number): number {
   return 1_623_800;
 }
 
-// ── Moto Customs Duty (flat 0% for simplification placeholder) ─────────────────
+// ── Moto Customs Duty ──────────────────────────────────────────────────────────
 
-function calcMotoDutyEur(priceEur: number, volumeCm3: number): number {
-  // Motorcycles use a simplified flat duty of 0% + per-cm3 rates are not
-  // defined in the EAEU grid provided. We apply the same logic as cars for
-  // consistency with the calculator spec (the spec only provides car/jeep grids).
-  // For moto, many calculators use a flat 10-20% rate or specific tables.
-  // Since the spec doesn't detail moto grids, we fall back to 0 (freight only).
-  void priceEur;
-  void volumeCm3;
+/** Moto duty: the EAEU spec does not provide a per-cm³ grid for motorcycles;
+ *  duty is handled via a separate regime. Returns 0 as the spec only covers car/jeep grids. */
+function calcMotoDutyEur(): number {
   return 0;
 }
 
@@ -254,7 +255,7 @@ export async function calculateTurnkeyPrice(params: CalcParams): Promise<CalcRes
 
   let dutyEur: number;
   if (vehicleType === 'moto') {
-    dutyEur = calcMotoDutyEur(customsValueEur, volumeCm3);
+    dutyEur = calcMotoDutyEur();
   } else {
     dutyEur = calcCustomsDutyEur(customsValueEur, volumeCm3, ageYears);
   }
@@ -279,9 +280,9 @@ export async function calculateTurnkeyPrice(params: CalcParams): Promise<CalcRes
     fixedFeesRub,
     finalTotalRub,
     appliedRates: {
-      JPY: Math.round(JPY_BANK * 10000) / 10000,
-      USD: Math.round(USD_BANK * 10000) / 10000,
-      EUR: Math.round(EUR_CBR * 10000) / 10000,
+      JPY: Math.round(JPY_BANK * RATE_PRECISION) / RATE_PRECISION,
+      USD: Math.round(USD_BANK * RATE_PRECISION) / RATE_PRECISION,
+      EUR: Math.round(EUR_CBR * RATE_PRECISION) / RATE_PRECISION,
     },
   };
 }
