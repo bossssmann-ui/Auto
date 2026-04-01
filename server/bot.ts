@@ -18,6 +18,8 @@ if (!openaiKey) {
 
 const openai = new OpenAI({ apiKey: openaiKey });
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+const TEMPERATURE = 0.7;
+const MAX_TOKENS = 1024;
 
 // ── System prompt — Alexey, senior sales expert ──────────
 const SYSTEM_PROMPT = `# РОЛЬ И ЛИЧНОСТЬ
@@ -131,11 +133,14 @@ async function getAIResponse(
   const completion = await openai.chat.completions.create({
     model: MODEL,
     messages: [{ role: "system", content: SYSTEM_PROMPT }, ...history],
-    temperature: 0.7,
-    max_tokens: 1024,
+    temperature: TEMPERATURE,
+    max_tokens: MAX_TOKENS,
   });
 
   const reply = completion.choices[0]?.message?.content ?? "";
+  if (!reply) {
+    console.warn(`⚠️ Empty OpenAI response for user ${userId}`);
+  }
   history.push({ role: "assistant", content: reply });
 
   return reply;
