@@ -1,8 +1,3 @@
-// Standalone customs calculator module
-// Replicates the official Russian Customs Calculator (tks.ru) for importing vehicles from Japan
-
-// ── Types ──────────────────────────────────────────────────────────────────────
-
 export interface CalcParams {
   vehicleType: 'car' | 'jeep' | 'moto' | 'special' | 'sanctioned';
   priceJPY: number;
@@ -31,12 +26,9 @@ interface CalcHumanRequired {
 
 export type CalcResult = CalcSuccess | CalcHumanRequired;
 
-// ── Constants ──────────────────────────────────────────────────────────────────
-
 const CBR_URL = 'https://www.cbr-xml-daily.ru/daily_json.js';
-const BANK_SPREAD = 1.04; // +4% spread when buying currency
+const BANK_SPREAD = 1.04; 
 
-/** Inland Japan logistics cost (JPY) */
 const INLAND_JPY: Record<string, number> = {
   car: 80_000,
   jeep: 120_000,
