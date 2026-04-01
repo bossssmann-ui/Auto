@@ -206,12 +206,13 @@ async function getAIResponse(
       false,
     );
 
-    const reply =
-      followUp.choices?.[0]?.message?.content ??
-      "Извините, не удалось получить ответ от AI. Попробуйте ещё раз.";
-    if (!reply) {
+    const followUpContent = followUp.choices?.[0]?.message?.content;
+    if (!followUpContent) {
       console.warn(`⚠️ Empty follow-up response for user ${userId}`);
     }
+    const reply =
+      followUpContent ??
+      "Извините, не удалось получить ответ от AI. Попробуйте ещё раз.";
     history.push({ role: "assistant", content: reply });
     return reply;
   }
