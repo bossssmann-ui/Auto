@@ -1,8 +1,3 @@
-// Standalone customs calculator module
-// Replicates the official Russian Customs Calculator (tks.ru) for importing vehicles from Japan
-
-// ── Types ──────────────────────────────────────────────────────────────────────
-
 export interface CalcParams {
   vehicleType: 'car' | 'jeep' | 'moto' | 'special' | 'sanctioned';
   priceJPY: number;
@@ -31,38 +26,28 @@ interface CalcHumanRequired {
 
 export type CalcResult = CalcSuccess | CalcHumanRequired;
 
-// ── Constants ──────────────────────────────────────────────────────────────────
-
 const CBR_URL = 'https://www.cbr-xml-daily.ru/daily_json.js';
-const BANK_SPREAD = 1.04; // +4% spread when buying currency
+const BANK_SPREAD = 1.04;
 
-/** Inland Japan logistics cost (JPY) */
 const INLAND_JPY: Record<string, number> = {
   car: 80_000,
   jeep: 120_000,
   moto: 60_000,
 };
 
-/** Sea freight cost (USD) */
 const FREIGHT_USD: Record<string, number> = {
   car: 400,
   jeep: 500,
   moto: 300,
 };
 
-/** Fixed Russian fees (SVH + SBKTS + Broker + Agent + SWIFT), RUB */
 const FIXED_FEES_RUB = 185_000;
 
-/** Export tax rate applied in Japan */
 const EXPORT_TAX_RATE = 0.10;
 
-/** Volume threshold (cm³) above which personal imports are taxed at commercial rate */
 const COMMERCIAL_VOLUME_THRESHOLD_CM3 = 3000;
 
-/** Precision multiplier for rounding exchange rates to 4 decimal places */
 const RATE_PRECISION = 10_000;
-
-// ── CBR Exchange Rates ─────────────────────────────────────────────────────────
 
 interface CbrCurrency {
   Value: number;
@@ -91,8 +76,6 @@ async function fetchCbrRates(): Promise<{ JPY_CBR: number; USD_CBR: number; EUR_
   };
 }
 
-// ── EAEU Customs Duty ──────────────────────────────────────────────────────────
-
 function calcCustomsDutyEur(priceEur: number, volumeCm3: number, ageYears: number): number {
   if (ageYears <= 3) {
     return calcDutyNew(priceEur, volumeCm3);
@@ -103,7 +86,6 @@ function calcCustomsDutyEur(priceEur: number, volumeCm3: number, ageYears: numbe
   return calcDutyOld(volumeCm3);
 }
 
-/** Age ≤ 3 years: percentage of value with minimum per cm³ */
 function calcDutyNew(priceEur: number, volumeCm3: number): number {
   let pct: number;
   let minPerCm3: number;
@@ -130,7 +112,6 @@ function calcDutyNew(priceEur: number, volumeCm3: number): number {
   return Math.max(byPercent, byVolume);
 }
 
-/** Age 3–5 years: strictly by volume */
 function calcDutyMid(volumeCm3: number): number {
   let ratePerCm3: number;
 
@@ -151,7 +132,6 @@ function calcDutyMid(volumeCm3: number): number {
   return volumeCm3 * ratePerCm3;
 }
 
-/** Age > 5 years: strictly by volume (higher rates) */
 function calcDutyOld(volumeCm3: number): number {
   let ratePerCm3: number;
 
@@ -172,8 +152,6 @@ function calcDutyOld(volumeCm3: number): number {
   return volumeCm3 * ratePerCm3;
 }
 
-// ── Recycling Fee (Утильсбор) ──────────────────────────────────────────────────
-
 function calcRecyclingFee(
   vehicleType: CalcParams['vehicleType'],
   volumeCm3: number,
@@ -189,7 +167,6 @@ function calcRecyclingFee(
     return commercialRecyclingFee(volumeCm3, ageYears);
   }
 
-  // Personal rate
   return ageYears <= 3 ? 3400 : 5200;
 }
 
@@ -202,7 +179,6 @@ function commercialRecyclingFee(volumeCm3: number, ageYears: number): number {
     return 1_235_200;
   }
 
-  // ageYears > 3
   if (volumeCm3 < 1000) return 207_200;
   if (volumeCm3 <= 2000) return 528_800;
   if (volumeCm3 <= 3000) return 1_150_000;
@@ -210,20 +186,13 @@ function commercialRecyclingFee(volumeCm3: number, ageYears: number): number {
   return 1_623_800;
 }
 
-// ── Moto Customs Duty ──────────────────────────────────────────────────────────
-
-/** Moto duty: the EAEU spec does not provide a per-cm³ grid for motorcycles;
- *  duty is handled via a separate regime. Returns 0 as the spec only covers car/jeep grids. */
 function calcMotoDutyEur(): number {
   return 0;
 }
 
-// ── Main Calculator ────────────────────────────────────────────────────────────
-
 export async function calculateTurnkeyPrice(params: CalcParams): Promise<CalcResult> {
   const { vehicleType, priceJPY, volumeCm3, ageYears, isForResale, isLegalEntity } = params;
 
-  // Exception: special & sanctioned vehicles
   if (vehicleType === 'special' || vehicleType === 'sanctioned') {
     return {
       success: false,
@@ -232,25 +201,19 @@ export async function calculateTurnkeyPrice(params: CalcParams): Promise<CalcRes
     };
   }
 
-  // Fetch live CBR rates
   const { JPY_CBR, USD_CBR, EUR_CBR } = await fetchCbrRates();
 
-  // Bank spread rates (used for converting actual cash costs)
   const JPY_BANK = JPY_CBR * BANK_SPREAD;
   const USD_BANK = USD_CBR * BANK_SPREAD;
 
-  // ── Japan-side costs ──────────────────────────────────────────────────────
   const inlandJpy = INLAND_JPY[vehicleType] ?? INLAND_JPY['car'];
   const priceWithExport = priceJPY * (1 + EXPORT_TAX_RATE);
   const japanTotalJpy = priceWithExport + inlandJpy;
   const japanTotalRub = Math.round(japanTotalJpy * JPY_BANK);
 
-  // ── Freight ───────────────────────────────────────────────────────────────
   const freightUsd = FREIGHT_USD[vehicleType] ?? FREIGHT_USD['car'];
   const freightRub = Math.round(freightUsd * USD_BANK);
 
-  // ── Customs Duty ──────────────────────────────────────────────────────────
-  // Customs value in EUR (strict CBR rate, no spread)
   const customsValueEur = (priceJPY * JPY_CBR) / EUR_CBR;
 
   let dutyEur: number;
@@ -262,13 +225,10 @@ export async function calculateTurnkeyPrice(params: CalcParams): Promise<CalcRes
 
   const customsDutyRub = Math.round(dutyEur * EUR_CBR);
 
-  // ── Recycling Fee (Утильсбор) ─────────────────────────────────────────────
   const utilFeeRub = calcRecyclingFee(vehicleType, volumeCm3, ageYears, isLegalEntity, isForResale);
 
-  // ── Fixed Fees ────────────────────────────────────────────────────────────
   const fixedFeesRub = FIXED_FEES_RUB;
 
-  // ── Total ─────────────────────────────────────────────────────────────────
   const finalTotalRub = japanTotalRub + freightRub + customsDutyRub + utilFeeRub + fixedFeesRub;
 
   return {
