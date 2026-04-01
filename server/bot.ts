@@ -132,6 +132,11 @@ async function chatCompletion(
   });
 
   if (!res.ok) {
+    const errorBody = await res.text();
+    console.error(
+      `❌ OpenRouter API error ${res.status} ${res.statusText}:`,
+      errorBody,
+    );
     throw new Error(`OpenRouter API error: ${res.status} ${res.statusText}`);
   }
 
@@ -153,7 +158,12 @@ async function getAIResponse(
     true,
   );
 
-  const message = completion.choices[0]?.message;
+  if (!completion.choices || !completion.choices[0]) {
+    console.error("❌ OpenRouter returned no choices:", JSON.stringify(completion));
+    return "Извините, не удалось получить ответ от AI. Попробуйте ещё раз.";
+  }
+
+  const message = completion.choices[0].message;
 
   // ── Handle tool calls ────────────────────────────────────
   if (message?.tool_calls && message.tool_calls.length > 0) {
@@ -196,7 +206,9 @@ async function getAIResponse(
       false,
     );
 
-    const reply = followUp.choices[0]?.message?.content ?? "";
+    const reply =
+      followUp.choices?.[0]?.message?.content ??
+      "Извините, не удалось получить ответ от AI. Попробуйте ещё раз.";
     if (!reply) {
       console.warn(`⚠️ Empty follow-up response for user ${userId}`);
     }
