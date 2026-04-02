@@ -144,7 +144,7 @@ function trimHistory(messages: ChatMessage[]): void {
 // ── OpenRouter API helper ────────────────────────────────
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-async function chatCompletion(userMessage: string): Promise<string> {
+async function chatCompletion(chatId: number, userMessage: string): Promise<string> {
   const model = process.env.OPENROUTER_MODEL || "deepseek/deepseek-chat";
   const apiKey = process.env.OPENROUTER_KEY;
 
@@ -152,7 +152,7 @@ async function chatCompletion(userMessage: string): Promise<string> {
     throw new Error("OPENROUTER_KEY is missing");
   }
 
-  const SYSTEM_PROMPT = `
+  const LOCAL_SYSTEM_PROMPT = `
 Ты — Алексей, старший менеджер компании «СпецТехМаш» (Находка / Владивосток).
 Специализация — импорт авто, мото и спецтехники из Японии, Кореи и Китая.
 Наши козыри: своя ТЛК «Тихоокеанская Звезда», полный контроль логистики и возврат НДС до 22 % для юрлиц.
@@ -378,10 +378,15 @@ JU:
 • Если уверенность в правовых/таможенных деталях низкая — не подавай их как абсолютный факт. Лучше скажи «нужно уточнить у менеджера» или «зависит от конкретного случая».
 `.trim();
 
+  const history = getOrCreateConversation(chatId);
+
   const body = {
     model,
     messages: [
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: LOCAL_SYSTEM_PROMPT },
+      ...history.filter((m): m is { role: "user" | "assistant"; content: string } =>
+        (m.role === "user" || m.role === "assistant") && typeof m.content === "string"
+      ),
       { role: "user", content: userMessage }
     ],
     temperature: 0.7,
@@ -424,9 +429,21 @@ JU:
   return content.trim();
 }
 
-async function getAIResponse(userMessage: string): Promise<string> {
+async function getAIResponse(chatId: number, userMessage: string): Promise<string> {
   try {
-    return await chatCompletion(userMessage);
+    const reply = await chatCompletion(chatId, userMessage);
+
+    // Save user + assistant messages to history only on success
+    const history = getOrCreateConversation(chatId);
+    if (userMessage) {
+      history.push({ role: "user", content: userMessage });
+    }
+    if (reply) {
+      history.push({ role: "assistant", content: reply });
+    }
+    trimHistory(history);
+
+    return reply;
   } catch (error) {
     console.error("❌ AI error:", error);
     return "Извините, произошла техническая ошибка. Попробуйте ещё раз чуть позже.";
@@ -470,7 +487,7 @@ bot.on("text", async (ctx) => {
 
   try {
     await ctx.sendChatAction("typing");
-    const reply = await getAIResponse(userText);
+    const reply = await getAIResponse(userId, userText);
     await ctx.reply(reply || "Извините, попробуйте переформулировать вопрос.");
   } catch (err) {
     console.error(`❌ AI error for user ${userId}:`, err);
