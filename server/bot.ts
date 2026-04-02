@@ -107,12 +107,13 @@ interface ToolCall {
 }
 
 interface ConversationEntry {
+  summary: string;
   messages: ChatMessage[];
   lastActivity: number;
 }
 
 const conversations = new Map<number, ConversationEntry>();
-const MAX_HISTORY_LENGTH = 30;
+const MAX_RECENT_MESSAGES = 6; // 3 user/assistant pairs
 const CONVERSATION_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 /** Evict stale conversations periodically */
@@ -125,20 +126,113 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000); // every 10 minutes
 
-function getOrCreateConversation(userId: number): ChatMessage[] {
+function getMemory(userId: number): ConversationEntry {
   let entry = conversations.get(userId);
   if (!entry) {
-    entry = { messages: [], lastActivity: Date.now() };
+    entry = { summary: "", messages: [], lastActivity: Date.now() };
     conversations.set(userId, entry);
   }
   entry.lastActivity = Date.now();
-  return entry.messages;
+  return entry;
 }
 
-function trimHistory(messages: ChatMessage[]): void {
-  while (messages.length > MAX_HISTORY_LENGTH) {
-    messages.shift();
+function appendMessage(
+  userId: number,
+  role: "user" | "assistant",
+  content: string,
+): void {
+  const mem = getMemory(userId);
+  mem.messages.push({ role, content });
+}
+
+interface OpenRouterResponse {
+  choices?: Array<{ message?: { content?: string } }>;
+}
+
+/** Summarize old messages via a cheap OpenRouter call */
+async function summarizeMemory(
+  previousSummary: string,
+  oldMessages: ChatMessage[],
+): Promise<string> {
+  const apiKey = process.env.OPENROUTER_KEY;
+  if (!apiKey) return previousSummary;
+
+  const model = process.env.OPENROUTER_MODEL || "deepseek/deepseek-chat";
+
+  const transcript = oldMessages
+    .map((m) => `${m.role}: ${m.content ?? ""}`)
+    .join("\n");
+
+  const prompt = [
+    previousSummary
+      ? `Existing summary:\n${previousSummary}\n\nNew messages:\n${transcript}`
+      : `Messages:\n${transcript}`,
+    "",
+    "Compress this conversation into a short factual memory for a Japanese car import sales assistant.",
+    "Keep only durable facts:",
+    "- requested car models and nicknames",
+    "- budget",
+    "- passable/non-passable age preference",
+    "- drivetrain",
+    "- hybrid/turbo preference",
+    "- trim level preference",
+    "- auction grade preference (4.5 / 3.5 / R etc.)",
+    "- whether repaired cars are acceptable",
+    "- any explicit dislikes or must-have requirements",
+    "- unresolved questions still pending",
+    "Drop greetings, filler, repetition, and temporary phrasing.",
+    "Return plain text only, max 1200 characters.",
+  ].join("\n");
+
+  try {
+    const response = await fetch(OPENROUTER_API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:3001",
+        "X-OpenRouter-Title": "SpecTechMash Telegram Bot",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.2,
+        max_tokens: 400,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error(
+        `⚠️ Summary call failed: ${response.status} ${response.statusText}`,
+      );
+      return previousSummary;
+    }
+
+    const data: OpenRouterResponse = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    if (typeof text === "string" && text.trim().length > 0) {
+      return text.trim();
+    }
+    return previousSummary;
+  } catch (err) {
+    console.error("⚠️ Summary call error:", err);
+    return previousSummary;
   }
+}
+
+/** If recent history exceeds the window, compress older messages into summary */
+async function maybeCompressMemory(userId: number): Promise<void> {
+  const mem = getMemory(userId);
+  if (mem.messages.length <= MAX_RECENT_MESSAGES) return;
+
+  const overflow = mem.messages.length - MAX_RECENT_MESSAGES;
+  const oldMessages = mem.messages.slice(0, overflow);
+
+  const newSummary = await summarizeMemory(mem.summary, oldMessages);
+
+  // Remove old messages only after summarization succeeds
+  mem.messages.splice(0, overflow);
+  mem.summary = newSummary;
 }
 
 // ── OpenRouter API helper ────────────────────────────────
@@ -385,15 +479,27 @@ JU:
 • Если уверенность в правовых/таможенных деталях низкая — не подавай их как абсолютный факт. Лучше скажи «нужно уточнить у менеджера» или «зависит от конкретного случая».
 `.trim();
 
-  const history = getOrCreateConversation(chatId);
+  const mem = getMemory(chatId);
+
+  const recentMessages = mem.messages.filter(
+    (m): m is { role: "user" | "assistant"; content: string } =>
+      (m.role === "user" || m.role === "assistant") &&
+      typeof m.content === "string",
+  );
 
   const body = {
     model,
     messages: [
       { role: "system", content: LOCAL_SYSTEM_PROMPT },
-      ...history.filter((m): m is { role: "user" | "assistant"; content: string } =>
-        (m.role === "user" || m.role === "assistant") && typeof m.content === "string"
-      ),
+      ...(mem.summary
+        ? [
+            {
+              role: "system" as const,
+              content: `Краткая сводка предыдущего диалога: ${mem.summary}`,
+            },
+          ]
+        : []),
+      ...recentMessages,
       { role: "user", content: userMessage }
     ],
     temperature: 0.7,
@@ -441,14 +547,15 @@ async function getAIResponse(chatId: number, userMessage: string): Promise<strin
     const reply = await chatCompletion(chatId, userMessage);
 
     // Save user + assistant messages to history only on success
-    const history = getOrCreateConversation(chatId);
     if (userMessage) {
-      history.push({ role: "user", content: userMessage });
+      appendMessage(chatId, "user", userMessage);
     }
     if (reply) {
-      history.push({ role: "assistant", content: reply });
+      appendMessage(chatId, "assistant", reply);
     }
-    trimHistory(history);
+
+    // Compress older messages into summary if window exceeded
+    await maybeCompressMemory(chatId);
 
     return reply;
   } catch (error) {
