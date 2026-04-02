@@ -1,6 +1,6 @@
 import { Telegraf } from "telegraf";
 import "dotenv/config";
-import { calculateTurnkeyPrice, type CalcParams } from "./calculator.js";
+import { calculateTurnkeyPrice, type CalcParams } from "./calculator";
 
 // ── Environment validation ───────────────────────────────
 const token = process.env.AI_BOT_TOKEN;
@@ -98,133 +98,79 @@ function trimHistory(messages: ChatMessage[]): void {
 }
 
 // ── OpenRouter API helper ────────────────────────────────
-interface OpenRouterResponse {
-  choices: Array<{
-    message: {
-      role: string;
-      content?: string;
-      tool_calls?: ToolCall[];
-    };
-  }>;
-}
+const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-async function chatCompletion(
-  messages: ChatMessage[],
-  useTools: boolean,
-): Promise<OpenRouterResponse> {
-  const body: Record<string, unknown> = {
-    model: MODEL,
-    messages,
-    temperature: TEMPERATURE,
-    max_tokens: MAX_TOKENS,
-  };
-  if (useTools) {
-    body.tools = tools;
+async function chatCompletion(userMessage: string): Promise<string> {
+  const model = process.env.OPENROUTER_MODEL || "deepseek/deepseek-chat";
+  const apiKey = process.env.OPENROUTER_KEY;
+
+  if (!apiKey) {
+    throw new Error("OPENROUTER_KEY is missing");
   }
 
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const SYSTEM_PROMPT = `
+Ты — Алексей, вежливый менеджер компании СпецТехМаш.
+Помогаешь клиентам подобрать автомобиль, мотоцикл или спецтехнику из Японии, Кореи и Китая.
+Отвечай спокойно, дружелюбно и по делу.
+Не используй агрессивные продажи, давление, манипуляции или ложные обещания.
+Не выдумывай наличие, цены, сроки, комплектации и характеристики.
+Если информации недостаточно, задай 1 уточняющий вопрос.
+Отвечай на русском языке.
+`.trim();
+
+  const body = {
+    model,
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: userMessage }
+    ],
+    temperature: 0.7,
+    max_tokens: 300
+  };
+
+  const response = await fetch(OPENROUTER_API_URL, {
     method: "POST",
     headers: {
+      "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      Authorization: `Bearer ${openrouterKey}`,
+      "HTTP-Referer": "http://localhost:3001",
+      "X-OpenRouter-Title": "SpecTechMash Telegram Bot"
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(body)
   });
 
-  if (!res.ok) {
-    const errorBody = await res.text();
-    console.error(
-      `❌ OpenRouter API error ${res.status} ${res.statusText}:`,
-      errorBody,
-    );
-    throw new Error(`OpenRouter API error: ${res.status} ${res.statusText}`);
+  const rawText = await response.text();
+
+  if (!response.ok) {
+    console.error(`❌ OpenRouter API error ${response.status} ${response.statusText}: ${rawText}`);
+    throw new Error(`OpenRouter API error: ${response.status} ${response.statusText}`);
   }
 
-  return (await res.json()) as OpenRouterResponse;
+  let data: any;
+  try {
+    data = JSON.parse(rawText);
+  } catch (e) {
+    console.error("❌ Failed to parse OpenRouter response:", rawText);
+    throw new Error("OpenRouter returned invalid JSON");
+  }
+
+  const content = data?.choices?.[0]?.message?.content;
+
+  if (!content || typeof content !== "string") {
+    console.error("❌ Unexpected OpenRouter response shape:", data);
+    throw new Error("OpenRouter returned empty response");
+  }
+
+  return content.trim();
 }
 
-/** Call the OpenRouter API with conversation history and tool calling */
-async function getAIResponse(
-  userId: number,
-  userMessage: string,
-): Promise<string> {
-  const history = getOrCreateConversation(userId);
-
-  history.push({ role: "user", content: userMessage });
-  trimHistory(history);
-
-  const completion = await chatCompletion(
-    [{ role: "system", content: SYSTEM_PROMPT }, ...history],
-    true,
-  );
-
-  if (!completion.choices || !completion.choices[0]) {
-    console.error("❌ OpenRouter returned no choices:", JSON.stringify(completion));
-    return "Извините, не удалось получить ответ от AI. Попробуйте ещё раз.";
+async function getAIResponse(userMessage: string): Promise<string> {
+  try {
+    return await chatCompletion(userMessage);
+  } catch (error) {
+    console.error("❌ AI error:", error);
+    return "Извините, произошла техническая ошибка. Попробуйте ещё раз чуть позже.";
   }
-
-  const message = completion.choices[0].message;
-
-  // ── Handle tool calls ────────────────────────────────────
-  if (message?.tool_calls && message.tool_calls.length > 0) {
-    // Push the assistant message with tool_calls into history
-    history.push(message as ChatMessage);
-
-    for (const toolCall of message.tool_calls) {
-      if (
-        toolCall.type === "function" &&
-        toolCall.function.name === "calculate_vehicle_price"
-      ) {
-        try {
-          const args = JSON.parse(toolCall.function.arguments) as CalcParams;
-          const result = await calculateTurnkeyPrice(args);
-
-          history.push({
-            role: "tool",
-            tool_call_id: toolCall.id,
-            content: JSON.stringify(result),
-          });
-        } catch (err) {
-          console.error("❌ Tool call error:", err);
-          history.push({
-            role: "tool",
-            tool_call_id: toolCall.id,
-            content: JSON.stringify({
-              success: false,
-              message: "Ошибка при расчёте. Попробуйте уточнить параметры.",
-            }),
-          });
-        }
-      }
-    }
-
-    trimHistory(history);
-
-    // Second call: let the model generate a human-readable response
-    const followUp = await chatCompletion(
-      [{ role: "system", content: SYSTEM_PROMPT }, ...history],
-      false,
-    );
-
-    const followUpContent = followUp.choices?.[0]?.message?.content;
-    if (!followUpContent) {
-      console.warn(`⚠️ Empty follow-up response for user ${userId}`);
-    }
-    const reply =
-      followUpContent ??
-      "Извините, не удалось получить ответ от AI. Попробуйте ещё раз.";
-    history.push({ role: "assistant", content: reply });
-    return reply;
-  }
-
-  // ── Regular (no tool call) response ──────────────────────
-  const reply = message?.content ?? "";
-  if (!reply) {
-    console.warn(`⚠️ Empty response for user ${userId}`);
-  }
-  history.push({ role: "assistant", content: reply });
-
-  return reply;
 }
 
 // ── Bot setup ────────────────────────────────────────────
@@ -264,7 +210,7 @@ bot.on("text", async (ctx) => {
 
   try {
     await ctx.sendChatAction("typing");
-    const reply = await getAIResponse(userId, userText);
+    const reply = await getAIResponse(userText);
     await ctx.reply(reply || "Извините, попробуйте переформулировать вопрос.");
   } catch (err) {
     console.error(`❌ AI error for user ${userId}:`, err);
