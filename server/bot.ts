@@ -15,7 +15,7 @@ if (!openrouterKey) {
   process.exit(1);
 }
 
-const MODEL = process.env.OPENROUTER_MODEL ?? "anthropic/claude-sonnet-4";
+const MODEL = process.env.OPENROUTER_MODEL || "anthropic/claude-sonnet-4.6";
 const TEMPERATURE = 0.7;
 const MAX_TOKENS = 1024;
 
@@ -157,8 +157,6 @@ async function summarizeMemory(
   const apiKey = process.env.OPENROUTER_KEY;
   if (!apiKey) return previousSummary;
 
-  const model = process.env.OPENROUTER_MODEL || "deepseek/deepseek-chat";
-
   const transcript = oldMessages
     .map((m) => `${m.role}: ${m.content ?? ""}`)
     .join("\n");
@@ -194,7 +192,7 @@ async function summarizeMemory(
         "X-OpenRouter-Title": "SpecTechMash Telegram Bot",
       },
       body: JSON.stringify({
-        model,
+        model: MODEL,
         messages: [{ role: "user", content: prompt }],
         temperature: 0.2,
         max_tokens: 400,
@@ -239,7 +237,6 @@ async function maybeCompressMemory(userId: number): Promise<void> {
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 async function chatCompletion(chatId: number, userMessage: string): Promise<string> {
-  const model = process.env.OPENROUTER_MODEL || "deepseek/deepseek-chat";
   const apiKey = process.env.OPENROUTER_KEY;
 
   if (!apiKey) {
@@ -488,7 +485,7 @@ JU:
   );
 
   const body = {
-    model,
+    model: MODEL,
     messages: [
       { role: "system", content: LOCAL_SYSTEM_PROMPT },
       ...(mem.summary
