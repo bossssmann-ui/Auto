@@ -113,7 +113,7 @@ interface ConversationEntry {
 }
 
 const conversations = new Map<number, ConversationEntry>();
-const MAX_RECENT_MESSAGES = 6; // 3 user/assistant pairs
+const MAX_RECENT_MESSAGES = 10; // 5 user/assistant pairs
 const CONVERSATION_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 /** Evict stale conversations periodically */
