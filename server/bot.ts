@@ -25,14 +25,15 @@ function cyrb(re: RegExp): RegExp {
 }
 
 // ── Environment validation ───────────────────────────────
+const isTestMode = !!process.env.BOT_TEST_MODE;
 const token = process.env.AI_BOT_TOKEN;
-if (!token) {
+if (!token && !isTestMode) {
   console.error("❌ AI_BOT_TOKEN is not set in environment variables.");
   process.exit(1);
 }
 
 const openrouterKey = process.env.OPENROUTER_KEY;
-if (!openrouterKey) {
+if (!openrouterKey && !isTestMode) {
   console.error("❌ OPENROUTER_KEY is not set in environment variables.");
   process.exit(1);
 }
@@ -670,7 +671,7 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
   else if (state.fuelType === "ev") knownParts.push("электро");
 
   if (state.color) knownParts.push(state.color);
-  if (state.budgetText) knownParts.push(`бюджет: ${state.budgetText}`);
+  if (state.budgetText && state.budgetText !== "approximate_guidance") knownParts.push(`бюджет: ${state.budgetText}`);
   if (state.auctionPriceJPY) knownParts.push(`аукц. цена: ${state.auctionPriceJPY} йен`);
   if (state.volumeCm3) knownParts.push(`объём: ${state.volumeCm3} см³`);
   if (state.isForResale != null) knownParts.push(state.isForResale ? "для перепродажи" : "для себя");
@@ -694,6 +695,7 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
 
   // ── Build missing calc-critical fields ──
   const missingQuestions: string[] = [];
+  const isBudgetGuidanceMode = state.budgetText === "approximate_guidance";
 
   if (state.activeIntent === "price_calc") {
     if (state.ageWindow === "non_passable" && !state.nonPassableType) {
@@ -726,7 +728,10 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
     }
   }
 
-  if (missingQuestions.length > 0) {
+  if (isBudgetGuidanceMode && missingQuestions.length === 0) {
+    // All other slots are filled — provide approximate budget guidance
+    parts.push("По бюджету без точной цены в йенах могу сориентировать примерно по рынку: подскажи диапазон по состоянию/пробегу, или могу посчитать от минимального и более живого варианта.");
+  } else if (missingQuestions.length > 0) {
     parts.push(`Уточни, пожалуйста: ${missingQuestions.join(", ")}.`);
   } else if (state.stage === "ready_to_calculate") {
     parts.push("Все данные есть, сейчас посчитаю.");
@@ -1209,7 +1214,17 @@ function extractStateUpdate(
   userMessage: string,
   previousState: ConversationState,
 ): StateUpdate {
-  const msg = userMessage.toLowerCase().replace(/ё/g, "е");
+  let msg = userMessage.toLowerCase().replace(/ё/g, "е");
+
+  // ── Russian numeric word normalization ──
+  // Normalize Russian number words to digits so downstream regexes work uniformly.
+  msg = msg
+    .replace(/(?<![а-яА-Яa-zA-Z])полторашк[а-яё]*/gi, "1.5 л")
+    .replace(/(?<![а-яА-Яa-zA-Z])полтора(?![а-яА-Яa-zA-Z])/gi, "1.5")
+    .replace(/(?<![а-яА-Яa-zA-Z])трех(?:летк[а-яё]*)/gi, "до 3 лет")
+    .replace(/(?<![а-яА-Яa-zA-Z])(?:трех|трёх)(?![а-яА-Яa-zA-Z])/gi, "3")
+    .replace(/(?<![а-яА-Яa-zA-Z])(?:пяти|пять)(?![а-яА-Яa-zA-Z])/gi, "5");
+
   const update: Partial<ConversationState> = {};
   const clearFields: ClearableField[] = [];
 
@@ -1281,11 +1296,23 @@ function extractStateUpdate(
     update.ageWindow = "passable";
   }
 
-  // Context-aware: standalone "свежий"/"старше" when nonPassableType is pending clarification
+  // Context-aware: standalone "свежий"/"старше"/"до 3 лет" when nonPassableType is pending clarification
   if (previousState.ageWindow === "non_passable" && !previousState.nonPassableType && !update.nonPassableType && !update.ageWindow) {
-    if (/(?:свеж|до\s*3|менее\s*3|младше\s*3|молод)/i.test(msg)) {
+    if (/(?:свеж|до\s*3\s*(?:-?\s*х)?|менее\s*3|младше\s*3|молод)/i.test(msg)) {
       update.nonPassableType = "under_3_years";
-    } else if (/(?:стар|больше\s*5|более\s*5|старше\s*5|свыше\s*5)/i.test(msg)) {
+    } else if (/(?:стар|больше\s*5|более\s*5|старше\s*5|свыше\s*5|от\s*5|5\s*\+)/i.test(msg)) {
+      update.nonPassableType = "over_5_years";
+    }
+  }
+
+  // Standalone nonPassableType detection (even without "непроходной" in this message):
+  // When the user says "до 3 лет" or "от 5 лет" alone, infer both ageWindow + nonPassableType
+  if (!update.ageWindow && !update.nonPassableType && !previousState.nonPassableType) {
+    if (/(?:до\s*3\s*(?:-?\s*х)?\s*лет)/i.test(msg)) {
+      update.ageWindow = "non_passable";
+      update.nonPassableType = "under_3_years";
+    } else if (/(?:(?:от|старше|свыше|более|больше)\s*5\s*(?:-?\s*и)?\s*лет|5\s*\+\s*лет)/i.test(msg)) {
+      update.ageWindow = "non_passable";
       update.nonPassableType = "over_5_years";
     }
   }
@@ -1429,13 +1456,23 @@ function extractStateUpdate(
   }
 
   // ── Budget parsing ──
-  const budgetMatch = msg.match(/(?:бюджет|до)\s+([\d.,]+\s*(?:тыс|тысяч|к|млн|миллион|\d)?[^\n,]*)/i);
-  if (budgetMatch) {
-    update.budgetText = budgetMatch[0];
+  // Detect "don't know the budget" / "show me approximate prices" FIRST
+  const BUDGET_UNKNOWN_RE = /(?:бюджет\s+не\s*знаю|не\s+знаю\s+бюджет|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|дай\s+примерн|засвети\s+стоимост|покажи\s+стоимост|сориентируй|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост))/i;
+  if (BUDGET_UNKNOWN_RE.test(msg)) {
+    update.budgetText = "approximate_guidance";
   }
-  const budgetMatch2 = msg.match(/(?:в\s+пределах)\s+([\d.,]+[^\n,]*)/i);
-  if (budgetMatch2) {
-    update.budgetText = budgetMatch2[0];
+
+  if (!update.budgetText) {
+    const budgetMatch = msg.match(/(?:бюджет|до)\s+([\d.,]+\s*(?:тыс|тысяч|к|млн|миллион|\d)?[^\n,]*)/i);
+    if (budgetMatch && !/лет/i.test(budgetMatch[0])) {
+      update.budgetText = budgetMatch[0];
+    }
+  }
+  if (!update.budgetText) {
+    const budgetMatch2 = msg.match(/(?:в\s+пределах)\s+([\d.,]+[^\n,]*)/i);
+    if (budgetMatch2) {
+      update.budgetText = budgetMatch2[0];
+    }
   }
 
   // ── Mileage parsing ──
@@ -2411,8 +2448,19 @@ async function getAIResponse(chatId: number, userMessage: string): Promise<strin
   }
 }
 
-// ── Bot setup ────────────────────────────────────────────
-const bot = new Telegraf(token);
+// ── Test exports (used by regression tests) ──
+export {
+  extractStateUpdate as _test_extractStateUpdate,
+  applyStateUpdate as _test_applyStateUpdate,
+  buildSafeFallbackReply as _test_buildSafeFallbackReply,
+  planReply as _test_planReply,
+  DEFAULT_CONVERSATION_STATE as _test_DEFAULT_CONVERSATION_STATE,
+};
+export type { ConversationState as _test_ConversationState };
+
+// ── Bot setup (skip in test mode) ────────────────────────
+if (!isTestMode) {
+const bot = new Telegraf(token!);
 
 // /start command — Alexey greets the user
 bot.start(async (ctx) => {
@@ -2475,3 +2523,4 @@ bot.launch().then(() => {
 // Graceful shutdown
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
+} // end if (!isTestMode)
