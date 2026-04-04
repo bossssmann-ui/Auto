@@ -121,6 +121,7 @@ interface ConversationState {
   ageWindow: "passable" | "non_passable" | null;
   nonPassableType: "under_3_years" | "over_5_years" | null;
 
+  // AWD is intentionally normalized to "4wd" — single internal convention
   drivetrain: "fwd" | "rwd" | "4wd" | null;
   steering: "rhd" | "lhd" | null;
 
@@ -518,11 +519,11 @@ function extractStateUpdate(
   // ── A) Model / slang resolution ──
   let matchedAlias: string | null = null;
   for (const entry of MODEL_SLANG) {
-    const m = userMessage.match(entry.patterns);
-    if (m) {
+    const slangMatch = userMessage.match(entry.patterns);
+    if (slangMatch) {
       update.make = entry.make;
       update.model = entry.model;
-      matchedAlias = m[0].toLowerCase();
+      matchedAlias = slangMatch[0].toLowerCase();
       break;
     }
   }
@@ -1249,7 +1250,7 @@ PARSED INTENT (структурированный разбор)
   if (!hasSubstantiveUpdate && !isFollowUpFilter(userMessage)) {
     // Deterministic parser found nothing — try LLM as backup
     const llmUpdate = await extractStateUpdateWithLLM(userMessage, mem.state);
-    // LLM enrichment: only add fields that deterministic parser missed
+    // Deterministic parser always takes precedence; LLM fills remaining gaps
     combinedUpdate = { ...llmUpdate, ...deterministicUpdate };
   }
 
