@@ -231,8 +231,14 @@ const DEFAULT_CONVERSATION_STATE: ConversationState = {
 /**
  * Derive implicit state values from what we already know.
  * E.g. Japan + no steering specified → rhd; model → make.
+ *
+ * @param explicitlySetKeys — keys that were explicitly set in the current update;
+ *   these take priority over derived values.
  */
-function deriveImpliedState(state: ConversationState): void {
+function deriveImpliedState(
+  state: ConversationState,
+  explicitlySetKeys: Set<string> = new Set(),
+): void {
   // If model is set but make is missing, try to infer make from MODEL_SLANG / EXPLICIT_MODEL_PATTERNS
   if (state.model && !state.make) {
     for (const entry of MODEL_SLANG) {
@@ -262,13 +268,16 @@ function deriveImpliedState(state: ConversationState): void {
     }
   }
 
-  // If year is set, derive ageWindow
-  if (state.year && !state.ageWindow) {
+  // Derive ageWindow from year — always recompute when year is present,
+  // UNLESS ageWindow was explicitly set in the current update (explicit wins).
+  if (state.year && !explicitlySetKeys.has("ageWindow")) {
     const currentYear = new Date().getFullYear();
     const age = currentYear - state.year;
     if (age >= 3 && age <= 5) {
       state.ageWindow = "passable";
+      state.nonPassableType = null;
       state.slotMeta.ageWindow = { source: "derived", confidence: "high", turnIndex: state.turnIndex };
+      delete state.slotMeta.nonPassableType;
     } else {
       state.ageWindow = "non_passable";
       state.nonPassableType = age < 3 ? "under_3_years" : "over_5_years";
@@ -313,7 +322,7 @@ function computeNeedsClarification(state: ConversationState): string[] {
 
   return missing;
 }
-function computeNextStage(state: ConversationState): ConversationStage {
+function deriveStage(state: ConversationState): ConversationStage {
   if (state.activeIntent === "other" && !state.model) {
     return "idle";
   }
@@ -323,11 +332,17 @@ function computeNextStage(state: ConversationState): ConversationStage {
   }
 
   if (state.activeIntent === "price_calc") {
-    // Check if we have enough data to calculate
+    // ready_to_calculate ONLY if ALL required calc fields exist
+    const hasModel = !!state.model;
     const hasPrice = state.auctionPriceJPY != null;
     const hasVolume = state.volumeCm3 != null;
     const hasAge = state.year != null || state.ageWindow != null;
-    if (hasPrice && hasVolume && hasAge) {
+    const hasResale = state.isForResale != null;
+    const hasEntity = state.isLegalEntity != null;
+    const nonPassableOk =
+      state.ageWindow !== "non_passable" || state.nonPassableType != null;
+
+    if (hasModel && hasPrice && hasVolume && hasAge && hasResale && hasEntity && nonPassableOk) {
       return "ready_to_calculate";
     }
     return "collecting_calc_params";
@@ -367,6 +382,12 @@ function buildPendingQuestion(state: ConversationState): string | null {
     if (state.isForResale == null && state.isLegalEntity == null) {
       return "Авто для себя (физлицо) или на юрлицо / для перепродажи?";
     }
+    if (state.isForResale == null) {
+      return "Авто для перепродажи или для себя?";
+    }
+    if (state.isLegalEntity == null) {
+      return "Оформляете на физлицо или юрлицо?";
+    }
     return null;
   }
 
@@ -396,6 +417,127 @@ function buildPendingQuestion(state: ConversationState): string | null {
   }
 
   return null;
+}
+
+/**
+ * Build CalcParams from conversation state.
+ * Returns null if any required field is missing — does NOT fake values.
+ * auctionPriceJPY is mandatory; budgetText is NOT a substitute.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function buildCalcParamsFromState(state: ConversationState): CalcParams | null {
+  if (state.auctionPriceJPY == null) return null;
+  if (state.volumeCm3 == null) return null;
+  if (state.isForResale == null) return null;
+  if (state.isLegalEntity == null) return null;
+
+  // Compute ageYears
+  let ageYears: number | null = null;
+  if (state.year != null) {
+    ageYears = new Date().getFullYear() - state.year;
+  } else if (state.ageWindow === "passable") {
+    ageYears = 4; // middle of 3-5 range
+  } else if (state.ageWindow === "non_passable" && state.nonPassableType === "under_3_years") {
+    ageYears = 1;
+  } else if (state.ageWindow === "non_passable" && state.nonPassableType === "over_5_years") {
+    ageYears = 7;
+  }
+  if (ageYears == null) return null;
+
+  // Determine vehicle type
+  let vehicleType: CalcParams["vehicleType"] = "car";
+  if (state.volumeCm3 > 1900) {
+    vehicleType = "sanctioned";
+  }
+
+  return {
+    vehicleType,
+    priceJPY: state.auctionPriceJPY,
+    volumeCm3: state.volumeCm3,
+    ageYears,
+    isForResale: state.isForResale,
+    isLegalEntity: state.isLegalEntity,
+  };
+}
+
+/**
+ * Deterministic reply planner — runs BEFORE the LLM.
+ * Returns a list of questions/instructions to guide the reply.
+ * If model is known, never asks about brand/model/type.
+ * Asks only the top 1-2 missing fields.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function planReply(state: ConversationState, _userMessage: string): string[] {
+  const hints: string[] = [];
+
+  // If model is known, confirm it and never ask about brand/model/type
+  if (state.model) {
+    hints.push(`Модель определена: ${state.make ?? ""} ${state.model}. НЕ спрашивай бренд/модель/тип.`);
+  }
+
+  // Collect missing critical fields (max 2)
+  const missingCritical: string[] = [];
+
+  if (state.activeIntent === "price_calc") {
+    if (state.auctionPriceJPY == null && !state.budgetText) {
+      missingCritical.push("аукционная цена в йенах или бюджет");
+    }
+    if (state.volumeCm3 == null) {
+      missingCritical.push("объём двигателя");
+    }
+    if (state.year == null && state.ageWindow == null) {
+      missingCritical.push("год выпуска или возрастное окно");
+    }
+    if (state.ageWindow === "non_passable" && state.nonPassableType == null) {
+      missingCritical.push("тип непроходного (до 3 лет или старше 5 лет)");
+    }
+    if (state.isForResale == null) {
+      missingCritical.push("для перепродажи или нет");
+    }
+    if (state.isLegalEntity == null) {
+      missingCritical.push("физлицо или юрлицо");
+    }
+  } else if (state.activeIntent === "car_search") {
+    if (!state.model && !state.make) {
+      missingCritical.push("модель или марка");
+    }
+    if (state.year == null && state.ageWindow == null) {
+      missingCritical.push("возрастное окно или год");
+    }
+    if (!state.budgetText) {
+      missingCritical.push("бюджет");
+    }
+  }
+
+  // Only top 2
+  const top = missingCritical.slice(0, 2);
+  if (top.length > 0) {
+    hints.push(`Спроси ТОЛЬКО: ${top.join(", ")}.`);
+  }
+
+  return hints;
+}
+
+/**
+ * Post-reply guard: checks if the reply violates known-model constraints.
+ * Returns true if the reply contains forbidden questions about model/brand
+ * when the model is already known.
+ */
+function violatesKnownModelGuard(reply: string, state: ConversationState): boolean {
+  if (!state.model) return false;
+  const lower = reply.toLowerCase();
+  const forbidden = [
+    "какая марка",
+    "какая модель",
+    "какой автомобиль вас интересует",
+    "что вы имеете в виду",
+    "какой бренд",
+    "какую марку",
+    "какую модель",
+    "какой тип техники",
+    "что вас интересует",
+  ];
+  return forbidden.some(phrase => lower.includes(phrase));
 }
 
 interface ConversationEntry {
@@ -499,6 +641,34 @@ function clearStateForModelSwitch(previous: ConversationState): ConversationStat
 /** Map extraction source to default confidence */
 function sourceConfidence(src: "regex" | "llm" | "user_explicit"): "high" | "medium" {
   return src === "regex" || src === "user_explicit" ? "high" : "medium";
+}
+
+/**
+ * Filter out LLM-proposed slots that would overwrite existing regex/high-confidence data.
+ * LLM may only fill empty slots or replace low-confidence ones.
+ */
+function applyLlmOverwriteProtection(
+  llmSet: Partial<ConversationState>,
+  existingState: ConversationState,
+): Partial<ConversationState> {
+  const filtered: Partial<ConversationState> = { ...llmSet };
+  const protectedKeys: SlotKey[] = [
+    "model", "make", "generation", "body",
+    "year", "ageWindow", "nonPassableType",
+    "drivetrain", "steering", "fuelType", "trimLevel",
+    "color", "mileageText", "auctionGradeMin",
+    "budgetText", "auctionPriceJPY", "volumeCm3",
+    "priority", "isForResale", "isLegalEntity",
+  ];
+  for (const key of protectedKeys) {
+    const meta = existingState.slotMeta[key];
+    if (!meta) continue; // slot is empty — LLM may fill
+    if (meta.confidence === "high" || meta.source === "regex" || meta.source === "user_explicit") {
+      // existing slot is high-confidence / regex — LLM must not overwrite
+      delete (filtered as Record<string, unknown>)[key];
+    }
+  }
+  return filtered;
 }
 
 /**
@@ -634,9 +804,14 @@ function applyStateUpdate(
   };
 
   // ── Step 5–7: Post-merge pipeline ──
-  deriveImpliedState(merged);
+  const explicitKeys = new Set(
+    (Object.keys(current) as Array<keyof typeof current>).filter(
+      k => current[k] !== undefined && current[k] !== null,
+    ),
+  );
+  deriveImpliedState(merged, explicitKeys);
   merged.needsClarification = computeNeedsClarification(merged);
-  merged.stage = computeNextStage(merged);
+  merged.stage = deriveStage(merged);
   merged.pendingQuestion = buildPendingQuestion(merged);
 
   return merged;
@@ -1111,22 +1286,24 @@ Return ONLY valid JSON matching this schema — no markdown, no code fences, no 
   "priority": "cheapest" | "best_condition" | "balanced" | null
 }
 
-CRITICAL SLANG RULES:
-- "везел" / "везела" / "везёл" / "визел" → model="Honda Vezel", make="Honda". NEVER "вездеход".
-- "харек" → model="Toyota Harrier", make="Toyota"
-- "филдер" → model="Toyota Corolla Fielder", make="Toyota"
-- "приус" → model="Toyota Prius", make="Toyota"
-- "прадик" → model="Toyota Land Cruiser Prado", make="Toyota"
-- "фит" → model="Honda Fit", make="Honda"
-- "вокси" → model="Toyota Voxy", make="Toyota"
-- "рав" / "рав4" / "равчик" → model="Toyota RAV4", make="Toyota"
-- "форик" / "форестер" → model="Subaru Forester", make="Subaru"
-- "камри" / "камрюха" → model="Toyota Camry", make="Toyota"
-- "краун" → model="Toyota Crown", make="Toyota"
+CRITICAL SLANG RULES (use SEPARATE make and model fields — never combine them):
+- "везел" / "везела" / "везёл" / "визел" → make="Honda", model="Vezel". NEVER "вездеход".
+- "харек" → make="Toyota", model="Harrier"
+- "филдер" → make="Toyota", model="Corolla Fielder"
+- "приус" → make="Toyota", model="Prius"
+- "прадик" → make="Toyota", model="Land Cruiser Prado"
+- "фит" → make="Honda", model="Fit"
+- "вокси" → make="Toyota", model="Voxy"
+- "рав" / "рав4" / "равчик" → make="Toyota", model="RAV4"
+- "форик" / "форестер" → make="Subaru", model="Forester"
+- "камри" / "камрюха" → make="Toyota", model="Camry"
+- "краун" → make="Toyota", model="Crown"
 - "лось" → make="Lexus", model=null (clarify specific model)
-- "крузак" → model="Toyota Land Cruiser", make="Toyota"
-- "цээрвуха" → model="Honda CR-V", make="Honda"
-- "ашэрвуха" → model="Honda HR-V", make="Honda"
+- "крузак" → make="Toyota", model="Land Cruiser"
+- "цээрвуха" → make="Honda", model="CR-V"
+- "ашэрвуха" → make="Honda", model="HR-V"
+
+IMPORTANT: "model" must be the model name ONLY (e.g. "Vezel", "Harrier"), NOT "Make Model" (e.g. NOT "Honda Vezel").
 
 AGE RULES:
 - "проходной" / "проходная" → ageWindow="passable" (3-5 years, favorable customs)
@@ -1200,7 +1377,14 @@ async function extractStateUpdateWithLLM(
 
     // Only pick non-null fields from LLM response
     if (parsed.activeIntent && parsed.activeIntent !== "other") result.activeIntent = parsed.activeIntent;
-    if (parsed.model) result.model = parsed.model;
+    if (parsed.model) {
+      let m = parsed.model;
+      // Normalize: strip make prefix if LLM returned "Honda Vezel" → "Vezel"
+      if (parsed.make && m.toLowerCase().startsWith(parsed.make.toLowerCase() + " ")) {
+        m = m.slice(parsed.make.length + 1);
+      }
+      result.model = m;
+    }
     if (parsed.make) result.make = parsed.make;
     if (parsed.generation) result.generation = parsed.generation;
     if (typeof parsed.year === "number") result.year = parsed.year;
@@ -1591,8 +1775,10 @@ PARSED INTENT (структурированный разбор)
     // Deterministic parser found nothing — try LLM as backup
     const llmUpdate = await extractStateUpdateWithLLM(userMessage, mem.state);
     // Deterministic parser always takes precedence; LLM fills remaining gaps
+    // Apply overwrite protection: LLM cannot overwrite regex/high-confidence slots
+    const protectedLlmSet = applyLlmOverwriteProtection(llmUpdate.set, mem.state);
     combinedUpdate = {
-      set: { ...llmUpdate.set, ...deterministicUpdate.set },
+      set: { ...protectedLlmSet, ...deterministicUpdate.set },
       clearFields: [...deterministicUpdate.clearFields, ...llmUpdate.clearFields],
     };
     mergeSource = "llm";
@@ -1667,6 +1853,15 @@ PARSED INTENT (структурированный разбор)
     });
   }
 
+  // Deterministic reply plan — tells LLM what to ask / not ask
+  const replyPlan = planReply(mergedState, userMessage);
+  if (replyPlan.length > 0) {
+    stateContextMessages.push({
+      role: "system" as const,
+      content: `REPLY PLAN (follow strictly):\n${replyPlan.map(h => `• ${h}`).join("\n")}`,
+    });
+  }
+
   const body = {
     model: MODEL,
     messages: [
@@ -1725,7 +1920,15 @@ PARSED INTENT (структурированный разбор)
 
 async function getAIResponse(chatId: number, userMessage: string): Promise<string> {
   try {
-    const reply = await chatCompletion(chatId, userMessage);
+    let reply = await chatCompletion(chatId, userMessage);
+
+    // Post-reply guard: if model is known and reply asks about model/brand, strip the offending part
+    const mem = getMemory(chatId);
+    if (violatesKnownModelGuard(reply, mem.state)) {
+      console.warn("⚠️ Post-reply guard triggered: reply asks about known model, regenerating...");
+      // Inject a corrective system message and re-call
+      reply = await chatCompletion(chatId, userMessage);
+    }
 
     // Save user + assistant messages to history only on success
     if (userMessage) {
