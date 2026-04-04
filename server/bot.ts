@@ -106,48 +106,54 @@ interface ToolCall {
   function: { name: string; arguments: string };
 }
 
-// ── Parsed car intent (parser-first pipeline) ────────────
-interface ParsedCarIntent {
-  intent: "car_search" | "price_calc" | "auction_explanation" | "other";
+// ── Conversation state (parser-first pipeline) ───────────
+interface ConversationState {
+  activeIntent: "car_search" | "price_calc" | "auction_explanation" | "other";
   model: string | null;
   make: string | null;
   generation: string | null;
+  year: number | null;
+  color: string | null;
   body: string | null;
   ageWindow: "passable" | "non_passable" | null;
   nonPassableType: "under_3_years" | "over_5_years" | null;
   drivetrain: "fwd" | "rwd" | "4wd" | "awd" | null;
   fuelType: "gasoline" | "hybrid" | "diesel" | "ev" | "phev" | null;
   trimLevel: "base" | "mid" | "top" | null;
+  auctionGradeMin: string | null;
   auctionGradesAllowed: string[];
+  mileageText: string | null;
   budgetText: string | null;
   priority: "cheapest" | "best_condition" | "balanced" | null;
   needsClarification: string[];
-  notes: string[];
 }
 
-const DEFAULT_PARSED_INTENT: ParsedCarIntent = {
-  intent: "other",
+const DEFAULT_CONVERSATION_STATE: ConversationState = {
+  activeIntent: "other",
   model: null,
   make: null,
   generation: null,
+  year: null,
+  color: null,
   body: null,
   ageWindow: null,
   nonPassableType: null,
   drivetrain: null,
   fuelType: null,
   trimLevel: null,
+  auctionGradeMin: null,
   auctionGradesAllowed: [],
+  mileageText: null,
   budgetText: null,
   priority: null,
   needsClarification: [],
-  notes: [],
 };
 
 interface ConversationEntry {
   summary: string;
   messages: ChatMessage[];
   lastActivity: number;
-  parsedIntent: ParsedCarIntent;
+  parsedIntent: ConversationState;
 }
 
 const conversations = new Map<number, ConversationEntry>();
@@ -167,7 +173,7 @@ setInterval(() => {
 function getMemory(userId: number): ConversationEntry {
   let entry = conversations.get(userId);
   if (!entry) {
-    entry = { summary: "", messages: [], lastActivity: Date.now(), parsedIntent: { ...DEFAULT_PARSED_INTENT } };
+    entry = { summary: "", messages: [], lastActivity: Date.now(), parsedIntent: { ...DEFAULT_CONVERSATION_STATE } };
     conversations.set(userId, entry);
   }
   entry.lastActivity = Date.now();
@@ -198,19 +204,19 @@ function isFollowUpFilter(message: string): boolean {
   return followUpPatterns.some((p) => p.test(trimmed));
 }
 
-/** Merge current parsed intent with previous, preserving already-known fields */
-function mergeParsedIntent(
-  previous: ParsedCarIntent,
-  current: ParsedCarIntent,
-): ParsedCarIntent {
+/** Merge current conversation state with previous, preserving already-known fields */
+function mergeConversationState(
+  previous: ConversationState,
+  current: ConversationState,
+): ConversationState {
   // If current looks like "other" but previous has a known model and current
   // message is likely a follow-up filter, preserve the previous car-related intent
   const effectiveIntent =
-    current.intent === "other" && previous.model != null
-      ? previous.intent
-      : current.intent !== "other"
-        ? current.intent
-        : previous.intent;
+    current.activeIntent === "other" && previous.model != null
+      ? previous.activeIntent
+      : current.activeIntent !== "other"
+        ? current.activeIntent
+        : previous.activeIntent;
 
   // Helper: pick current value if it's non-null, otherwise keep previous
   const pick = <T>(prev: T | null, cur: T | null): T | null => cur ?? prev;
@@ -226,7 +232,7 @@ function mergeParsedIntent(
   };
 
   // For needsClarification: remove items that are now resolved
-  // NOTE: keys here must match field names in ParsedCarIntent
+  // NOTE: keys here must match field names in ConversationState
   const mergedClarification = previous.needsClarification.filter((item) => {
     const fieldMap: Record<string, unknown> = {
       nonPassableType: current.nonPassableType,
@@ -235,6 +241,10 @@ function mergeParsedIntent(
       trimLevel: current.trimLevel,
       budgetText: current.budgetText,
       ageWindow: current.ageWindow,
+      year: current.year,
+      color: current.color,
+      mileageText: current.mileageText,
+      auctionGradeMin: current.auctionGradeMin,
     };
     return !(item in fieldMap && fieldMap[item] != null);
   });
@@ -246,21 +256,24 @@ function mergeParsedIntent(
   }
 
   return {
-    intent: effectiveIntent,
+    activeIntent: effectiveIntent,
     model,
     make,
     generation: pick(previous.generation, current.generation),
+    year: pick(previous.year, current.year),
+    color: pick(previous.color, current.color),
     body: pick(previous.body, current.body),
     ageWindow: pick(previous.ageWindow, current.ageWindow),
     nonPassableType: pick(previous.nonPassableType, current.nonPassableType),
     drivetrain: pick(previous.drivetrain, current.drivetrain),
     fuelType: pick(previous.fuelType, current.fuelType),
     trimLevel: pick(previous.trimLevel, current.trimLevel),
+    auctionGradeMin: pick(previous.auctionGradeMin, current.auctionGradeMin),
     auctionGradesAllowed: mergeArrays(previous.auctionGradesAllowed, current.auctionGradesAllowed),
+    mileageText: pick(previous.mileageText, current.mileageText),
     budgetText: pick(previous.budgetText, current.budgetText),
     priority: pick(previous.priority, current.priority),
     needsClarification: mergedClarification,
-    notes: mergeArrays(previous.notes, current.notes),
   };
 }
 
@@ -370,21 +383,24 @@ Given a user message in Russian (possibly with slang), extract structured car-se
 Return ONLY valid JSON matching this schema — no markdown, no code fences, no explanation:
 
 {
-  "intent": "car_search" | "price_calc" | "auction_explanation" | "other",
+  "activeIntent": "car_search" | "price_calc" | "auction_explanation" | "other",
   "model": string | null,
   "make": string | null,
   "generation": string | null,
+  "year": number | null,
+  "color": string | null,
   "body": string | null,
   "ageWindow": "passable" | "non_passable" | null,
   "nonPassableType": "under_3_years" | "over_5_years" | null,
   "drivetrain": "fwd" | "rwd" | "4wd" | "awd" | null,
   "fuelType": "gasoline" | "hybrid" | "diesel" | "ev" | "phev" | null,
   "trimLevel": "base" | "mid" | "top" | null,
+  "auctionGradeMin": string | null,
   "auctionGradesAllowed": string[],
+  "mileageText": string | null,
   "budgetText": string | null,
   "priority": "cheapest" | "best_condition" | "balanced" | null,
-  "needsClarification": string[],
-  "notes": string[]
+  "needsClarification": string[]
 }
 
 CRITICAL SLANG RULES:
@@ -418,16 +434,20 @@ FILTER RULES:
 - "максималка" / "жирная" → trimLevel="top"
 - "главное дешевле" / "подешевле" / "попроще" → priority="cheapest"
 - "оценка R тоже можно" / "R допустима" → add "R" to auctionGradesAllowed
-- "посчитай" / "посчитать" / "можешь посчитать" → intent="price_calc"
+- "посчитай" / "посчитать" / "можешь посчитать" → activeIntent="price_calc"
+- "белый" / "чёрный" / "серебристый" etc. → color (in Russian, as the client said it)
+- "2023" / "2024 год" → year (numeric, e.g. 2023)
+- "не больше 4.5" / "минимум 4" → auctionGradeMin (e.g. "4.5", "4")
+- "до 100 тысяч пробег" / "пробег до 80к" → mileageText (as free text, e.g. "до 100 тыс. км")
 
-If the message is not about cars at all, return intent="other" with all other fields null/empty.
+If the message is not about cars at all, return activeIntent="other" with all other fields null/empty.
 Return ONLY the JSON object. No other text.`;
 
 async function parseUserIntent(
   userMessage: string,
-): Promise<ParsedCarIntent> {
+): Promise<ConversationState> {
   const apiKey = process.env.OPENROUTER_KEY;
-  if (!apiKey) return { ...DEFAULT_PARSED_INTENT };
+  if (!apiKey) return { ...DEFAULT_CONVERSATION_STATE };
 
   try {
     const response = await fetch(OPENROUTER_API_URL, {
@@ -451,39 +471,42 @@ async function parseUserIntent(
 
     if (!response.ok) {
       console.error(`⚠️ Parser call failed: ${response.status} ${response.statusText}`);
-      return { ...DEFAULT_PARSED_INTENT };
+      return { ...DEFAULT_CONVERSATION_STATE };
     }
 
     const data: OpenRouterResponse = await response.json();
     const raw = data?.choices?.[0]?.message?.content;
     if (typeof raw !== "string" || raw.trim().length === 0) {
-      return { ...DEFAULT_PARSED_INTENT };
+      return { ...DEFAULT_CONVERSATION_STATE };
     }
 
     // Strip possible markdown code fences despite instructions
     const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-    const parsed = JSON.parse(cleaned) as Partial<ParsedCarIntent>;
+    const parsed = JSON.parse(cleaned) as Partial<ConversationState>;
 
     return {
-      intent: parsed.intent ?? "other",
+      activeIntent: parsed.activeIntent ?? "other",
       model: parsed.model ?? null,
       make: parsed.make ?? null,
       generation: parsed.generation ?? null,
+      year: typeof parsed.year === "number" ? parsed.year : null,
+      color: parsed.color ?? null,
       body: parsed.body ?? null,
       ageWindow: parsed.ageWindow ?? null,
       nonPassableType: parsed.nonPassableType ?? null,
       drivetrain: parsed.drivetrain ?? null,
       fuelType: parsed.fuelType ?? null,
       trimLevel: parsed.trimLevel ?? null,
+      auctionGradeMin: parsed.auctionGradeMin ?? null,
       auctionGradesAllowed: Array.isArray(parsed.auctionGradesAllowed) ? parsed.auctionGradesAllowed : [],
+      mileageText: parsed.mileageText ?? null,
       budgetText: parsed.budgetText ?? null,
       priority: parsed.priority ?? null,
       needsClarification: Array.isArray(parsed.needsClarification) ? parsed.needsClarification : [],
-      notes: Array.isArray(parsed.notes) ? parsed.notes : [],
     };
   } catch (err) {
     console.error("⚠️ Parser error (falling back to default intent):", err);
-    return { ...DEFAULT_PARSED_INTENT };
+    return { ...DEFAULT_CONVERSATION_STATE };
   }
 }
 
@@ -808,7 +831,7 @@ PARSED INTENT (структурированный разбор)
 • НЕ переспрашивай то, что уже заполнено (например, если model="Honda Vezel" — работай с Vezel, не спрашивай "какую машину хотите?").
 • НЕ переинтерпретируй модель в абстрактный класс техники.
 • Задавай вопросы ТОЛЬКО по полям, перечисленным в needsClarification, или по критически недостающим данным (бюджет, точный диапазон лет).
-• Если intent="price_calc" но данных для calculate_vehicle_price недостаточно — подтверди фильтры и спроси только недостающее (аукционная цена в йенах, объём двигателя, точный возраст).
+• Если activeIntent="price_calc" но данных для calculate_vehicle_price недостаточно — подтверди фильтры и спроси только недостающее (аукционная цена в йенах, объём двигателя, точный возраст).
 
 ════════════════════════════════════════════
 ЖЁСТКИЙ ЗАПРЕТ: ЕСЛИ МОДЕЛЬ ИЗВЕСТНА
@@ -826,12 +849,12 @@ PARSED INTENT (структурированный разбор)
 
   // If it's a short follow-up and current parse lost the model, treat as update
   const isFollowUp = isFollowUpFilter(userMessage) && mem.parsedIntent.model != null;
-  const adjustedCurrent = isFollowUp && currentParsed.intent === "other"
-    ? { ...currentParsed, intent: mem.parsedIntent.intent as ParsedCarIntent["intent"] }
+  const adjustedCurrent = isFollowUp && currentParsed.activeIntent === "other"
+    ? { ...currentParsed, activeIntent: mem.parsedIntent.activeIntent as ConversationState["activeIntent"] }
     : currentParsed;
 
   // Merge with persistent intent state
-  const effectiveIntent = mergeParsedIntent(mem.parsedIntent, adjustedCurrent);
+  const effectiveIntent = mergeConversationState(mem.parsedIntent, adjustedCurrent);
   mem.parsedIntent = effectiveIntent;
 
   const recentMessages = mem.messages.filter(
@@ -842,7 +865,7 @@ PARSED INTENT (структурированный разбор)
 
   // Build parsed intent context message (only when intent is car-related)
   const parsedIntentMessages: Array<{ role: "system"; content: string }> = [];
-  if (effectiveIntent.intent !== "other" || effectiveIntent.model != null) {
+  if (effectiveIntent.activeIntent !== "other" || effectiveIntent.model != null) {
     parsedIntentMessages.push({
       role: "system" as const,
       content: `Parsed user intent (MERGED from conversation history — trust these extracted filters, do NOT re-interpret the model or ask questions about fields that are already filled): ${JSON.stringify(effectiveIntent)}`,
