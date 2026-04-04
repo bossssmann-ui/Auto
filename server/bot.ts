@@ -397,6 +397,26 @@ function isFollowUpFilter(message: string): boolean {
   return followUpPatterns.some((p) => p.test(trimmed));
 }
 
+/** On model switch, preserve metadata only for slots that are NOT model-dependent */
+function preserveNonDependentMeta(
+  meta: Partial<Record<keyof ConversationState, SlotMeta>>,
+): Partial<Record<keyof ConversationState, SlotMeta>> {
+  const kept: Partial<Record<keyof ConversationState, SlotMeta>> = {};
+  const nonDependent: Array<keyof ConversationState> = [
+    "drivetrain", "steering", "fuelType", "color",
+    "priority", "isForResale", "isLegalEntity",
+  ];
+  for (const key of nonDependent) {
+    if (meta[key]) kept[key] = meta[key];
+  }
+  return kept;
+}
+
+/** Map extraction source to default confidence */
+function sourceConfidence(src: "regex" | "llm" | "user_explicit"): "high" | "medium" {
+  return src === "regex" || src === "user_explicit" ? "high" : "medium";
+}
+
 /**
  * Merge current turn's extracted update into the persistent conversation state.
  *
@@ -478,7 +498,7 @@ function mergeConversationState(
   const trackSlot = (key: string, val: unknown): void => {
     if (val !== undefined && val !== null) {
       mergedSlotMeta[key as keyof ConversationState] = {
-        source, confidence: source === "regex" ? "high" : "medium", turnIndex: nextTurn,
+        source, confidence: sourceConfidence(source), turnIndex: nextTurn,
       };
     }
   };
@@ -533,7 +553,7 @@ function mergeConversationState(
     needsClarification: isModelSwitch ? (current.needsClarification ?? []) : mergedClarification,
     lastResolvedModelAlias: current.lastResolvedModelAlias ?? previous.lastResolvedModelAlias,
     turnIndex: nextTurn,
-    slotMeta: isModelSwitch ? {} : mergedSlotMeta,
+    slotMeta: isModelSwitch ? preserveNonDependentMeta(previous.slotMeta) : mergedSlotMeta,
   };
 
   // ── Post-merge: derive implicit values, compute stage, build pending question ──
@@ -1500,7 +1520,7 @@ PARSED INTENT (структурированный разбор)
 
   // Serialize the state snapshot for the LLM (omit internal bookkeeping)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { slotMeta: _sm, turnIndex: _ti, pendingQuestion: _pq, ...stateForLLM } = mergedState;
+  const { slotMeta: _slotMeta, turnIndex: _turnIndex, pendingQuestion: _pendingQ, ...stateForLLM } = mergedState;
 
   if (mergedState.activeIntent !== "other" || mergedState.model != null) {
     stateContextMessages.push({
