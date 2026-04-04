@@ -1298,7 +1298,7 @@ function extractStateUpdate(
 
   // Context-aware: standalone "свежий"/"старше"/"до 3 лет" when nonPassableType is pending clarification
   if (previousState.ageWindow === "non_passable" && !previousState.nonPassableType && !update.nonPassableType && !update.ageWindow) {
-    if (/(?:свеж|до\s*3|менее\s*3|младше\s*3|молод|до\s*3\s*-?\s*х)/i.test(msg)) {
+    if (/(?:свеж|до\s*3\s*(?:-?\s*х)?|менее\s*3|младше\s*3|молод)/i.test(msg)) {
       update.nonPassableType = "under_3_years";
     } else if (/(?:стар|больше\s*5|более\s*5|старше\s*5|свыше\s*5|от\s*5|5\s*\+)/i.test(msg)) {
       update.nonPassableType = "over_5_years";
@@ -1457,7 +1457,8 @@ function extractStateUpdate(
 
   // ── Budget parsing ──
   // Detect "don't know the budget" / "show me approximate prices" FIRST
-  if (/(?:бюджет\s+не\s*знаю|не\s+знаю\s+бюджет|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|дай\s+примерн|засвети\s+стоимост|покажи\s+стоимост|сориентируй|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост))/i.test(msg)) {
+  const BUDGET_UNKNOWN_RE = /(?:бюджет\s+не\s*знаю|не\s+знаю\s+бюджет|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|дай\s+примерн|засвети\s+стоимост|покажи\s+стоимост|сориентируй|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост))/i;
+  if (BUDGET_UNKNOWN_RE.test(msg)) {
     update.budgetText = "approximate_guidance";
   }
 
