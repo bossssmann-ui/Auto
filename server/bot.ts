@@ -106,8 +106,25 @@ interface ToolCall {
   function: { name: string; arguments: string };
 }
 
+// ── Stage machine types ──────────────────────────────────
+
+type ConversationStage =
+  | "idle"
+  | "collecting_filters"
+  | "collecting_calc_params"
+  | "ready_to_calculate"
+  | "explaining_auction"
+  | "handoff";
+
+interface SlotMeta {
+  source: "regex" | "llm" | "user_explicit" | "derived";
+  confidence: "high" | "medium" | "low";
+  turnIndex: number;
+}
+
 // ── Conversation state (parser-first pipeline) ───────────
 interface ConversationState {
+  stage: ConversationStage;
   activeIntent: "car_search" | "price_calc" | "auction_explanation" | "other";
 
   model: string | null;
@@ -143,11 +160,17 @@ interface ConversationState {
 
   priority: "cheapest" | "best_condition" | "balanced" | null;
 
+  pendingQuestion: string | null;
   needsClarification: string[];
+
   lastResolvedModelAlias: string | null;
+  turnIndex: number;
+
+  slotMeta: Partial<Record<keyof ConversationState, SlotMeta>>;
 }
 
 const DEFAULT_CONVERSATION_STATE: ConversationState = {
+  stage: "idle",
   activeIntent: "other",
   model: null,
   make: null,
@@ -171,9 +194,148 @@ const DEFAULT_CONVERSATION_STATE: ConversationState = {
   isForResale: null,
   isLegalEntity: null,
   priority: null,
+  pendingQuestion: null,
   needsClarification: [],
   lastResolvedModelAlias: null,
+  turnIndex: 0,
+  slotMeta: {},
 };
+
+/**
+ * Derive implicit state values from what we already know.
+ * E.g. Japan + no steering specified → rhd; model → make.
+ */
+function deriveImpliedState(state: ConversationState): void {
+  // If model is set but make is missing, try to infer make from MODEL_SLANG / EXPLICIT_MODEL_PATTERNS
+  if (state.model && !state.make) {
+    for (const entry of MODEL_SLANG) {
+      if (entry.model && entry.model.toLowerCase() === state.model.toLowerCase()) {
+        state.make = entry.make;
+        state.slotMeta.make = { source: "derived", confidence: "high", turnIndex: state.turnIndex };
+        break;
+      }
+    }
+    if (!state.make) {
+      for (const entry of EXPLICIT_MODEL_PATTERNS) {
+        if (entry.model.toLowerCase() === state.model.toLowerCase()) {
+          state.make = entry.make;
+          state.slotMeta.make = { source: "derived", confidence: "high", turnIndex: state.turnIndex };
+          break;
+        }
+      }
+    }
+  }
+
+  // Japan origin + no steering → default to RHD
+  if (!state.steering && state.make) {
+    const jpBrands = ["Toyota", "Honda", "Nissan", "Subaru", "Mitsubishi", "Mazda", "Suzuki", "Lexus", "Infiniti", "Daihatsu"];
+    if (jpBrands.includes(state.make)) {
+      state.steering = "rhd";
+      state.slotMeta.steering = { source: "derived", confidence: "medium", turnIndex: state.turnIndex };
+    }
+  }
+
+  // If year is set, derive ageWindow
+  if (state.year && !state.ageWindow) {
+    const currentYear = new Date().getFullYear();
+    const age = currentYear - state.year;
+    if (age >= 3 && age <= 5) {
+      state.ageWindow = "passable";
+      state.slotMeta.ageWindow = { source: "derived", confidence: "high", turnIndex: state.turnIndex };
+    } else {
+      state.ageWindow = "non_passable";
+      state.nonPassableType = age < 3 ? "under_3_years" : "over_5_years";
+      state.slotMeta.ageWindow = { source: "derived", confidence: "high", turnIndex: state.turnIndex };
+      state.slotMeta.nonPassableType = { source: "derived", confidence: "high", turnIndex: state.turnIndex };
+    }
+  }
+}
+
+/** Compute next stage based on current intent and filled slots */
+function computeNextStage(state: ConversationState): ConversationStage {
+  if (state.activeIntent === "other" && !state.model) {
+    return "idle";
+  }
+
+  if (state.activeIntent === "auction_explanation") {
+    return "explaining_auction";
+  }
+
+  if (state.activeIntent === "price_calc") {
+    // Check if we have enough data to calculate
+    const hasPrice = state.auctionPriceJPY != null;
+    const hasVolume = state.volumeCm3 != null;
+    const hasAge = state.year != null || state.ageWindow != null;
+    if (hasPrice && hasVolume && hasAge) {
+      return "ready_to_calculate";
+    }
+    return "collecting_calc_params";
+  }
+
+  // car_search or has model set
+  if (state.model || state.make || state.activeIntent === "car_search") {
+    return "collecting_filters";
+  }
+
+  return "idle";
+}
+
+/** Build the single most important pending question based on stage + missing slots */
+function buildPendingQuestion(state: ConversationState): string | null {
+  if (state.stage === "idle") return null;
+
+  // If explicit clarification is needed (e.g. non_passable type unknown)
+  if (state.needsClarification.length > 0) {
+    const field = state.needsClarification[0];
+    if (field === "nonPassableType") {
+      return "Непроходной — имеете в виду свежий (до 3 лет) или старше 5 лет?";
+    }
+    return null; // generic clarification handled by LLM
+  }
+
+  if (state.stage === "collecting_calc_params") {
+    if (!state.auctionPriceJPY && !state.budgetText) {
+      return "Какой ориентир по бюджету или аукционной цене в йенах?";
+    }
+    if (!state.volumeCm3) {
+      return "Какой объём двигателя?";
+    }
+    if (!state.year && !state.ageWindow) {
+      return "Какой год выпуска (или проходной/непроходной)?";
+    }
+    if (state.isForResale == null && state.isLegalEntity == null) {
+      return "Авто для себя (физлицо) или на юрлицо / для перепродажи?";
+    }
+    return null;
+  }
+
+  if (state.stage === "collecting_filters") {
+    // Don't ask if model + 2 filters are already known
+    const filledFilterCount = [
+      state.ageWindow, state.drivetrain, state.fuelType,
+      state.trimLevel, state.color, state.year, state.budgetText,
+      state.priority, state.auctionGradeMin,
+    ].filter(v => v != null).length;
+
+    if (state.model && filledFilterCount >= 2) {
+      // Enough info — only ask critical missing if any
+      if (!state.ageWindow && !state.year) {
+        return "Какой возраст интересует — проходной (3–5 лет) или другой?";
+      }
+      if (!state.budgetText) {
+        return "Какой ориентир по бюджету?";
+      }
+      return null;
+    }
+
+    if (!state.model && !state.make) {
+      return null; // LLM will ask naturally
+    }
+    return null;
+  }
+
+  return null;
+}
 
 interface ConversationEntry {
   summary: string;
@@ -199,7 +361,12 @@ setInterval(() => {
 function getMemory(userId: number): ConversationEntry {
   let entry = conversations.get(userId);
   if (!entry) {
-    entry = { summary: "", messages: [], lastActivity: Date.now(), state: { ...DEFAULT_CONVERSATION_STATE } };
+    entry = {
+      summary: "",
+      messages: [],
+      lastActivity: Date.now(),
+      state: { ...DEFAULT_CONVERSATION_STATE, auctionGradesAllowed: [], needsClarification: [], slotMeta: {} },
+    };
     conversations.set(userId, entry);
   }
   entry.lastActivity = Date.now();
@@ -230,13 +397,45 @@ function isFollowUpFilter(message: string): boolean {
   return followUpPatterns.some((p) => p.test(trimmed));
 }
 
-/** Merge current conversation state with previous, preserving already-known fields */
+/** On model switch, preserve metadata only for slots that are NOT model-dependent */
+function preserveNonDependentMeta(
+  meta: Partial<Record<keyof ConversationState, SlotMeta>>,
+): Partial<Record<keyof ConversationState, SlotMeta>> {
+  const kept: Partial<Record<keyof ConversationState, SlotMeta>> = {};
+  const nonDependent: Array<keyof ConversationState> = [
+    "drivetrain", "steering", "fuelType", "color",
+    "priority", "isForResale", "isLegalEntity",
+  ];
+  for (const key of nonDependent) {
+    if (meta[key]) kept[key] = meta[key];
+  }
+  return kept;
+}
+
+/** Map extraction source to default confidence */
+function sourceConfidence(src: "regex" | "llm" | "user_explicit"): "high" | "medium" {
+  return src === "regex" || src === "user_explicit" ? "high" : "medium";
+}
+
+/**
+ * Merge current turn's extracted update into the persistent conversation state.
+ *
+ * Key behaviors:
+ * 1. Model switch detection — when the user names a *different* model, reset
+ *    all model-dependent slots (generation, body, year, auction price, etc.)
+ * 2. Intent preservation — short follow-ups keep the previous intent.
+ * 3. Clarification lifecycle — resolved items are removed, new ones added.
+ * 4. Slot meta tracking — record source/confidence/turn for each slot.
+ * 5. After merge: derive implied state, compute stage, build pending question.
+ */
 function mergeConversationState(
   previous: ConversationState,
   current: Partial<ConversationState>,
+  source: "regex" | "llm" | "user_explicit",
 ): ConversationState {
-  // If current looks like "other" but previous has a known model and current
-  // message is likely a follow-up filter, preserve the previous car-related intent
+  const nextTurn = previous.turnIndex + 1;
+
+  // ── Intent resolution ──
   const currentIntent = current.activeIntent ?? "other";
   const effectiveIntent =
     currentIntent === "other" && previous.model != null
@@ -245,9 +444,16 @@ function mergeConversationState(
         ? currentIntent
         : previous.activeIntent;
 
-  // Helper: pick current value if it's non-null/undefined, otherwise keep previous
+  // Helper: pick current value if non-null/undefined, otherwise keep previous
   const pick = <T>(prev: T | null, cur: T | null | undefined): T | null =>
     cur !== undefined && cur !== null ? cur : prev;
+
+  // ── Model switch detection ──
+  const incomingModel = current.model ?? null;
+  const isModelSwitch =
+    incomingModel != null &&
+    previous.model != null &&
+    incomingModel.toLowerCase() !== previous.model.toLowerCase();
 
   // For model/make: never erase if current omitted them
   const model = current.model ?? previous.model;
@@ -260,7 +466,8 @@ function mergeConversationState(
     return [...set];
   };
 
-  // For needsClarification: remove items that are now resolved
+  // ── Clarification lifecycle ──
+  // Remove items that are now resolved by incoming update
   const mergedClarification = previous.needsClarification.filter((item) => {
     const fieldMap: Record<string, unknown> = {
       nonPassableType: current.nonPassableType,
@@ -279,40 +486,82 @@ function mergeConversationState(
     };
     return !(item in fieldMap && fieldMap[item] != null);
   });
-  // Add new clarifications from current
+  // Add new clarifications
   for (const item of current.needsClarification ?? []) {
     if (!mergedClarification.includes(item)) {
       mergedClarification.push(item);
     }
   }
 
-  return {
+  // ── Build merged slot meta ──
+  const mergedSlotMeta = { ...previous.slotMeta };
+  const trackSlot = (key: string, val: unknown): void => {
+    if (val !== undefined && val !== null) {
+      mergedSlotMeta[key as keyof ConversationState] = {
+        source, confidence: sourceConfidence(source), turnIndex: nextTurn,
+      };
+    }
+  };
+  trackSlot("model", current.model);
+  trackSlot("make", current.make);
+  trackSlot("generation", current.generation);
+  trackSlot("body", current.body);
+  trackSlot("year", current.year);
+  trackSlot("ageWindow", current.ageWindow);
+  trackSlot("nonPassableType", current.nonPassableType);
+  trackSlot("drivetrain", current.drivetrain);
+  trackSlot("steering", current.steering);
+  trackSlot("fuelType", current.fuelType);
+  trackSlot("trimLevel", current.trimLevel);
+  trackSlot("color", current.color);
+  trackSlot("mileageText", current.mileageText);
+  trackSlot("auctionGradeMin", current.auctionGradeMin);
+  trackSlot("budgetText", current.budgetText);
+  trackSlot("auctionPriceJPY", current.auctionPriceJPY);
+  trackSlot("volumeCm3", current.volumeCm3);
+  trackSlot("priority", current.priority);
+  trackSlot("isForResale", current.isForResale);
+  trackSlot("isLegalEntity", current.isLegalEntity);
+
+  // ── Assemble merged state ──
+  const merged: ConversationState = {
+    stage: previous.stage, // will be recomputed below
     activeIntent: effectiveIntent,
     model,
     make,
-    generation: pick(previous.generation, current.generation),
-    body: pick(previous.body, current.body),
-    year: pick(previous.year, current.year),
-    yearText: pick(previous.yearText, current.yearText),
-    ageWindow: pick(previous.ageWindow, current.ageWindow),
-    nonPassableType: pick(previous.nonPassableType, current.nonPassableType),
+    generation: isModelSwitch ? (current.generation ?? null) : pick(previous.generation, current.generation),
+    body: isModelSwitch ? (current.body ?? null) : pick(previous.body, current.body),
+    year: isModelSwitch ? (current.year ?? null) : pick(previous.year, current.year),
+    yearText: isModelSwitch ? (current.yearText ?? null) : pick(previous.yearText, current.yearText),
+    ageWindow: isModelSwitch ? (current.ageWindow ?? null) : pick(previous.ageWindow, current.ageWindow),
+    nonPassableType: isModelSwitch ? (current.nonPassableType ?? null) : pick(previous.nonPassableType, current.nonPassableType),
     drivetrain: pick(previous.drivetrain, current.drivetrain),
     steering: pick(previous.steering, current.steering),
     fuelType: pick(previous.fuelType, current.fuelType),
-    trimLevel: pick(previous.trimLevel, current.trimLevel),
+    trimLevel: isModelSwitch ? (current.trimLevel ?? null) : pick(previous.trimLevel, current.trimLevel),
     color: pick(previous.color, current.color),
-    mileageText: pick(previous.mileageText, current.mileageText),
-    auctionGradeMin: pick(previous.auctionGradeMin, current.auctionGradeMin),
-    auctionGradesAllowed: mergeArrays(previous.auctionGradesAllowed, current.auctionGradesAllowed),
-    budgetText: pick(previous.budgetText, current.budgetText),
-    auctionPriceJPY: pick(previous.auctionPriceJPY, current.auctionPriceJPY),
-    volumeCm3: pick(previous.volumeCm3, current.volumeCm3),
+    mileageText: isModelSwitch ? (current.mileageText ?? null) : pick(previous.mileageText, current.mileageText),
+    auctionGradeMin: isModelSwitch ? (current.auctionGradeMin ?? null) : pick(previous.auctionGradeMin, current.auctionGradeMin),
+    auctionGradesAllowed: isModelSwitch ? (current.auctionGradesAllowed ?? []) : mergeArrays(previous.auctionGradesAllowed, current.auctionGradesAllowed),
+    budgetText: isModelSwitch ? (current.budgetText ?? null) : pick(previous.budgetText, current.budgetText),
+    auctionPriceJPY: isModelSwitch ? (current.auctionPriceJPY ?? null) : pick(previous.auctionPriceJPY, current.auctionPriceJPY),
+    volumeCm3: isModelSwitch ? (current.volumeCm3 ?? null) : pick(previous.volumeCm3, current.volumeCm3),
     isForResale: pick(previous.isForResale, current.isForResale),
     isLegalEntity: pick(previous.isLegalEntity, current.isLegalEntity),
     priority: pick(previous.priority, current.priority),
-    needsClarification: mergedClarification,
+    pendingQuestion: null, // will be recomputed
+    needsClarification: isModelSwitch ? (current.needsClarification ?? []) : mergedClarification,
     lastResolvedModelAlias: current.lastResolvedModelAlias ?? previous.lastResolvedModelAlias,
+    turnIndex: nextTurn,
+    slotMeta: isModelSwitch ? preserveNonDependentMeta(previous.slotMeta) : mergedSlotMeta,
   };
+
+  // ── Post-merge: derive implicit values, compute stage, build pending question ──
+  deriveImpliedState(merged);
+  merged.stage = computeNextStage(merged);
+  merged.pendingQuestion = buildPendingQuestion(merged);
+
+  return merged;
 }
 
 function appendMessage(
@@ -1246,17 +1495,19 @@ PARSED INTENT (структурированный разбор)
   );
 
   let combinedUpdate: Partial<ConversationState> = deterministicUpdate;
+  let mergeSource: "regex" | "llm" = "regex";
 
   if (!hasSubstantiveUpdate && !isFollowUpFilter(userMessage)) {
     // Deterministic parser found nothing — try LLM as backup
     const llmUpdate = await extractStateUpdateWithLLM(userMessage, mem.state);
     // Deterministic parser always takes precedence; LLM fills remaining gaps
     combinedUpdate = { ...llmUpdate, ...deterministicUpdate };
+    mergeSource = "llm";
   }
 
-  // Step 3: merge with persistent state
-  const effectiveIntent = mergeConversationState(mem.state, combinedUpdate);
-  mem.state = effectiveIntent;
+  // Step 3: merge with persistent state (includes derive, stage transition, pending question)
+  const mergedState = mergeConversationState(mem.state, combinedUpdate, mergeSource);
+  mem.state = mergedState;
 
   const recentMessages = mem.messages.filter(
     (m): m is { role: "user" | "assistant"; content: string } =>
@@ -1264,20 +1515,63 @@ PARSED INTENT (структурированный разбор)
       typeof m.content === "string",
   );
 
-  // Build parsed intent context message (only when intent is car-related)
-  const parsedIntentMessages: Array<{ role: "system"; content: string }> = [];
-  if (effectiveIntent.activeIntent !== "other" || effectiveIntent.model != null) {
-    parsedIntentMessages.push({
+  // ── Build stage-aware context messages ──
+  const stateContextMessages: Array<{ role: "system"; content: string }> = [];
+
+  // Serialize the state snapshot for the LLM (omit internal bookkeeping)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { slotMeta: _slotMeta, turnIndex: _turnIndex, pendingQuestion: _pendingQ, ...stateForLLM } = mergedState;
+
+  if (mergedState.activeIntent !== "other" || mergedState.model != null) {
+    stateContextMessages.push({
       role: "system" as const,
-      content: `Parsed user intent (MERGED from conversation history — trust these extracted filters, do NOT re-interpret the model or ask questions about fields that are already filled): ${JSON.stringify(effectiveIntent)}`,
+      content: [
+        `CONVERSATION STAGE: ${mergedState.stage}`,
+        `Parsed user intent (MERGED from full conversation — trust these extracted filters, do NOT re-interpret the model or ask questions about fields already filled):`,
+        JSON.stringify(stateForLLM),
+      ].join("\n"),
     });
+
     // Hard reply guard: if model is known, inject a strong constraint
-    if (effectiveIntent.model) {
-      parsedIntentMessages.push({
+    if (mergedState.model) {
+      stateContextMessages.push({
         role: "system" as const,
-        content: `HARD CONSTRAINT: The client's car model is already resolved as "${effectiveIntent.model}" (${effectiveIntent.make ?? ""}). Do NOT ask: "какой бренд?", "какую марку?", "какую модель?", "какой тип техники?", "что вас интересует?". These questions are FORBIDDEN. Treat any new filters as updates to this model.`,
+        content: `HARD CONSTRAINT: The client's car model is already resolved as "${mergedState.model}" (${mergedState.make ?? ""}). Do NOT ask: "какой бренд?", "какую марку?", "какую модель?", "какой тип техники?", "что вас интересует?". These questions are FORBIDDEN. Treat any new filters as updates to this model.`,
       });
     }
+  }
+
+  // Stage-specific instructions
+  if (mergedState.stage === "collecting_calc_params") {
+    const missing: string[] = [];
+    if (!mergedState.auctionPriceJPY && !mergedState.budgetText) missing.push("аукционная цена в йенах или бюджет");
+    if (!mergedState.volumeCm3) missing.push("объём двигателя");
+    if (!mergedState.year && !mergedState.ageWindow) missing.push("год или возрастное окно");
+    if (mergedState.isForResale == null && mergedState.isLegalEntity == null) missing.push("физ/юрлицо или перепродажа");
+    if (missing.length > 0) {
+      stateContextMessages.push({
+        role: "system" as const,
+        content: `STAGE=collecting_calc_params: Клиент хочет расчёт. Подтверди уже известные фильтры и спроси ТОЛЬКО недостающее для расчёта: ${missing.join(", ")}. НЕ задавай другие вопросы.`,
+      });
+    }
+  } else if (mergedState.stage === "ready_to_calculate") {
+    stateContextMessages.push({
+      role: "system" as const,
+      content: `STAGE=ready_to_calculate: Все параметры для расчёта собраны. Вызови calculate_vehicle_price. Не задавай лишних вопросов.`,
+    });
+  } else if (mergedState.stage === "explaining_auction") {
+    stateContextMessages.push({
+      role: "system" as const,
+      content: `STAGE=explaining_auction: Клиент спрашивает про аукционные оценки. Объясни кратко и по делу.`,
+    });
+  }
+
+  // Pending question hint (if the state machine determined one)
+  if (mergedState.pendingQuestion) {
+    stateContextMessages.push({
+      role: "system" as const,
+      content: `SUGGESTED NEXT QUESTION (ask naturally, not verbatim): ${mergedState.pendingQuestion}`,
+    });
   }
 
   const body = {
@@ -1292,7 +1586,7 @@ PARSED INTENT (структурированный разбор)
             },
           ]
         : []),
-      ...parsedIntentMessages,
+      ...stateContextMessages,
       ...recentMessages,
       { role: "user", content: userMessage }
     ],
