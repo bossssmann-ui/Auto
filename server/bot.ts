@@ -7,6 +7,11 @@ import { calculateTurnkeyPrice, type CalcParams } from "./calculator";
 // on Cyrillic characters. This helper replaces \b with lookaround assertions
 // that include Cyrillic letters, enabling correct word boundary detection
 // for Russian text patterns.
+//
+// IMPORTANT: Only use on patterns with exactly 1 or 2 \b assertions in the
+// standard structure \b(...)\b. The first \b becomes a negative lookbehind
+// (before-word boundary) and any subsequent \b becomes a negative lookahead
+// (after-word boundary). Do NOT use on patterns with 3+ \b.
 function cyrb(re: RegExp): RegExp {
   let isFirst = true;
   const fixed = re.source.replace(/\\b/g, () => {
@@ -1275,7 +1280,7 @@ function extractStateUpdate(
     update.drivetrain = "fwd";
   } else if (/(?:задн(?:ий|яя)?\s*привод|задн(?:ий|яя)?(?:\s|$))/i.test(msg)) {
     update.drivetrain = "rwd";
-  } else if (/(?:полн(?:ый|ая)?\s*привод|(?<![а-яёА-ЯЁa-zA-Z0-9])вд(?![а-яёА-ЯЁa-zA-Z0-9])|4\s*(?:вд|wd)(?![а-яёА-ЯЁa-zA-Z0-9])|\bawd\b)/i.test(msg)) {
+  } else if (/(?:полн(?:ый|ая)?\s*привод|(?<![а-яёА-ЯЁa-zA-Z0-9])вд(?![а-яёА-ЯЁa-zA-Z0-9])|4\s*(?:вд|wd)(?![а-яёА-ЯЁa-zA-Z0-9])|(?<![а-яёА-ЯЁa-zA-Z0-9])awd(?![а-яёА-ЯЁa-zA-Z0-9]))/i.test(msg)) {
     update.drivetrain = "4wd";
   }
 
