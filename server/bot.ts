@@ -1050,6 +1050,20 @@ function applyStateUpdate(
     return [...set];
   };
 
+  // Merge seller claims by meaning (deduplicated by meaning field)
+  const mergeSellerClaims = (prev: SellerClaim[], cur: SellerClaim[]): SellerClaim[] => {
+    if (cur.length === 0) return prev;
+    const seen = new Set(prev.map(c => c.meaning));
+    const merged = [...prev];
+    for (const claim of cur) {
+      if (!seen.has(claim.meaning)) {
+        merged.push(claim);
+        seen.add(claim.meaning);
+      }
+    }
+    return merged;
+  };
+
   // For model/make: never erase if current omitted them
   const model = current.model ?? base.model;
   const make = current.make ?? base.make;
@@ -1093,7 +1107,7 @@ function applyStateUpdate(
     manualWindows: current.manualWindows || base.manualWindows,
     turbo: current.turbo || base.turbo,
     noRussiaMileage: current.noRussiaMileage || base.noRussiaMileage,
-    sellerClaims: mergeArrays(base.sellerClaims.map(c => JSON.stringify(c)), (current.sellerClaims ?? []).map(c => JSON.stringify(c))).map(s => JSON.parse(s) as SellerClaim),
+    sellerClaims: mergeSellerClaims(base.sellerClaims, current.sellerClaims ?? []),
     excludedNegativeFlags: mergeArrays(base.excludedNegativeFlags, current.excludedNegativeFlags ?? []),
   };
 
@@ -1517,7 +1531,8 @@ function extractStateUpdate(
   }
 
   // Trim level
-  if (/(?:сам(?:ый|ая)\s+прост(?:ой|ая)|попроще|(?<![а-яёА-ЯЁa-zA-Z0-9])база(?![а-яёА-ЯЁa-zA-Z0-9])|базов)/i.test(msg)) {
+  const BASE_TRIM_RE = /(?:сам(?:ый|ая)\s+прост(?:ой|ая)|попроще|(?<![а-яёА-ЯЁa-zA-Z0-9])база(?![а-яёА-ЯЁa-zA-Z0-9])|базов)/i;
+  if (BASE_TRIM_RE.test(msg)) {
     update.trimLevel = "base";
   } else if (/(?:средн(?:яя|ий|ее)|средн(?:\s|$))/i.test(msg)) {
     update.trimLevel = "mid";
@@ -1526,7 +1541,7 @@ function extractStateUpdate(
   }
 
   // Priority
-  if (/(?:подешевле|главное\s+дешевле|попроще.*цен|бюджетн|сам(?:ый|ая)\s+прост(?:ой|ая))/i.test(msg)) {
+  if (/(?:подешевле|главное\s+дешевле|попроще.*цен|бюджетн)/i.test(msg) || BASE_TRIM_RE.test(msg)) {
     update.priority = "cheapest";
   } else if (/(?:главное\s+живой|получше\s+состояни|хорош(?:ее|ий)\s+состояни)/i.test(msg)) {
     update.priority = "best_condition";
