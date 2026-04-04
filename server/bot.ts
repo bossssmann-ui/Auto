@@ -16,8 +16,8 @@ if (!openrouterKey) {
 }
 
 const MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-5.4";
-const TEMPERATURE = 0.7;
-const MAX_TOKENS = 1024;
+const TEMPERATURE = 0.3;
+const MAX_TOKENS = 600;
 
 // ── Tool definitions for function calling ────────────────
 const tools = [{
@@ -40,57 +40,6 @@ const tools = [{
   }
 }];
 
-const SYSTEM_PROMPT = `
-Ты — Алексей, старший менеджер компании «СпецТехМаш» (Находка / Владивосток).
-Специализация — импорт авто, мото и спецтехники из Японии, Кореи и Китая.
-Наши козыри: своя ТЛК «Тихоокеанская Звезда», полный контроль логистики и возврат НДС до 22 % для юрлиц.
-
-═══ ЯЗЫК И СТИЛЬ ═══
-• Отвечай по-русски, коротко и по делу, как реальный менеджер с авторынка ДВ.
-• Если клиент использует сленг («проходной», «вд», «максималка», «конструктор», «распил», «аукционник», «санкционка» и т.д.) — отвечай в том же тоне, не переходя на канцелярит.
-• Не добавляй «С уважением» и формальные подписи в обычной переписке.
-• Задавай минимум уточняющих вопросов; если клиент уже дал достаточно фильтров — переходи к бюджету, годам или комплектациям.
-
-═══ ТЕРМИНОЛОГИЯ ═══
-• «проходной» = примерно 3–5 лет (выгодное таможенное окно).
-• «непроходной» = младше 3 лет или старше 5 лет. Если неясно, какой именно — уточни.
-• «вд» = полный привод (4WD / AWD).
-• «максималка» = максимальная комплектация.
-• «правый» / «левый» = расположение руля.
-• «гибрид» = гибридный двигатель (HV / PHEV).
-• «аукционник» = аукционный лист.
-• «санкционка» = санкционный автомобиль (объём > 1.9 л и другие ограничения).
-• «конструктор» / «распил» = схемы ввоза с разборкой.
-
-═══ РУЛЬ ═══
-Если клиент говорит про Японию и не уточняет руль — по умолчанию имеется в виду правый.
-
-═══ ПОКОЛЕНИЯ И ГОДЫ (примеры) ═══
-• Toyota Prius 30 ≈ 2009–2015
-• Toyota Prius 50 ≈ 2015–2022
-• Toyota Prius 60 ≈ 2023+
-• Toyota Yaris Cross (JP) ≈ 2020+
-Используй ту же логику поколений для других японских моделей (JDM, праворульный рынок, ~2010–2012+).
-Если запрошенная комбинация возраста и поколения невозможна — мягко объясни и предложи реалистичную альтернативу.
-
-═══ КОНТЕКСТ МОДЕЛИ ═══
-Держи текущую модель авто в контексте разговора. НЕ переключайся на другую модель, пока клиент явно не сменит тему.
-
-═══ СТАРЫЕ / ПРОБЛЕМНЫЕ АВТО ═══
-Если авто настолько старое, что стандартный импорт и оформление ЭПТС проблематичны — скажи клиенту, что нужен индивидуальный разбор с менеджером, и собери контактные данные (имя + телефон).
-
-═══ САНКЦИОННЫЕ И СПЕЦТЕХНИКА ═══
-Если авто санкционное (>1.9 л) или спецтехника: не считай цену, скажи, что логистика нестандартная, собери параметры и передай оператору.
-
-═══ РАСЧЁТ ОБЫЧНОЙ МАШИНЫ ═══
-Если просят расчёт: собери тип, цену в йенах, объём двигателя, возраст, для кого авто (физлицо / юрлицо / перепродажа) — затем вызови calculate_vehicle_price. Результат распиши понятно.
-Лимит скидки — 20 000 ₽, только для закрытия сделки.
-
-═══ БЕЗОПАСНОСТЬ ═══
-• Не выдумывай точные цены, наличие или сроки доставки.
-• Не обещай невозможного.
-• Не используй манипуляции или агрессивные тактики продаж.
-`;
 
 // ── Per-user conversation history ────────────────────────
 interface ChatMessage {
@@ -419,6 +368,54 @@ function buildPendingQuestion(state: ConversationState): string | null {
   return null;
 }
 
+/** Build a human-readable summary of known filters for the LLM context */
+function buildKnownFiltersSummary(state: ConversationState): string {
+  const parts: string[] = [];
+  if (state.make && state.model) parts.push(`модель: ${state.make} ${state.model}`);
+  else if (state.make) parts.push(`марка: ${state.make}`);
+  else if (state.model) parts.push(`модель: ${state.model}`);
+
+  if (state.ageWindow === "passable") parts.push("возраст: проходной (3–5 лет)");
+  else if (state.ageWindow === "non_passable") {
+    if (state.nonPassableType === "under_3_years") parts.push("возраст: непроходной (до 3 лет)");
+    else if (state.nonPassableType === "over_5_years") parts.push("возраст: непроходной (старше 5 лет)");
+    else parts.push("возраст: непроходной (тип НЕ уточнён!)");
+  }
+  if (state.year) parts.push(`год: ${state.year}`);
+
+  if (state.drivetrain === "fwd") parts.push("привод: передний");
+  else if (state.drivetrain === "rwd") parts.push("привод: задний");
+  else if (state.drivetrain === "4wd") parts.push("привод: полный");
+
+  if (state.fuelType === "gasoline") parts.push("топливо: бензин");
+  else if (state.fuelType === "hybrid") parts.push("топливо: гибрид");
+  else if (state.fuelType === "diesel") parts.push("топливо: дизель");
+  else if (state.fuelType === "ev") parts.push("топливо: электро");
+
+  if (state.trimLevel === "base") parts.push("комплектация: базовая");
+  else if (state.trimLevel === "mid") parts.push("комплектация: средняя");
+  else if (state.trimLevel === "top") parts.push("комплектация: максимальная");
+
+  if (state.steering === "rhd") parts.push("руль: правый");
+  else if (state.steering === "lhd") parts.push("руль: левый");
+
+  if (state.color) parts.push(`цвет: ${state.color}`);
+  if (state.budgetText) parts.push(`бюджет: ${state.budgetText}`);
+  if (state.auctionPriceJPY) parts.push(`аукц. цена: ${state.auctionPriceJPY} йен`);
+  if (state.volumeCm3) parts.push(`объём: ${state.volumeCm3} см³`);
+  if (state.auctionGradeMin) parts.push(`мин. оценка: ${state.auctionGradeMin}`);
+  if (state.auctionGradesAllowed.length > 0) parts.push(`допустимые оценки: ${state.auctionGradesAllowed.join(", ")}`);
+  if (state.priority === "cheapest") parts.push("приоритет: подешевле");
+  else if (state.priority === "best_condition") parts.push("приоритет: лучшее состояние");
+  else if (state.priority === "balanced") parts.push("приоритет: баланс");
+
+  if (state.isForResale != null) parts.push(state.isForResale ? "для перепродажи" : "для себя");
+  if (state.isLegalEntity != null) parts.push(state.isLegalEntity ? "юрлицо" : "физлицо");
+  if (state.mileageText) parts.push(`пробег: ${state.mileageText}`);
+
+  return parts.join("; ");
+}
+
 /**
  * Build CalcParams from conversation state.
  * Returns null if any required field is missing — does NOT fake values.
@@ -479,17 +476,18 @@ function planReply(state: ConversationState, _userMessage: string): string[] {
   const missingCritical: string[] = [];
 
   if (state.activeIntent === "price_calc") {
+    // nonPassableType first — blocks age computation and is quick to answer
+    if (state.ageWindow === "non_passable" && state.nonPassableType == null) {
+      missingCritical.push("непроходной: свежий (до 3 лет) или старый (старше 5 лет)");
+    }
     if (state.auctionPriceJPY == null && !state.budgetText) {
-      missingCritical.push("аукционная цена в йенах или бюджет");
+      missingCritical.push("бюджет или аукционная цена в йенах");
     }
     if (state.volumeCm3 == null) {
       missingCritical.push("объём двигателя");
     }
     if (state.year == null && state.ageWindow == null) {
       missingCritical.push("год выпуска или возрастное окно");
-    }
-    if (state.ageWindow === "non_passable" && state.nonPassableType == null) {
-      missingCritical.push("тип непроходного (до 3 лет или старше 5 лет)");
     }
     if (state.isForResale == null) {
       missingCritical.push("для перепродажи или нет");
@@ -1794,75 +1792,92 @@ PARSED INTENT (структурированный разбор)
       typeof m.content === "string",
   );
 
-  // ── Build stage-aware context messages ──
-  const stateContextMessages: Array<{ role: "system"; content: string }> = [];
-
-  // Serialize the state snapshot for the LLM (omit internal bookkeeping)
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { slotMeta: _slotMeta, turnIndex: _turnIndex, pendingQuestion: _pendingQ, ...stateForLLM } = mergedState;
+  // ── Build a SINGLE consolidated state context message ──
+  // Consolidating into one message helps the LLM follow instructions better.
+  const stateContextParts: string[] = [];
 
   if (mergedState.activeIntent !== "other" || mergedState.model != null) {
-    stateContextMessages.push({
-      role: "system" as const,
-      content: [
-        `CONVERSATION STAGE: ${mergedState.stage}`,
-        `Parsed user intent (MERGED from full conversation — trust these extracted filters, do NOT re-interpret the model or ask questions about fields already filled):`,
-        JSON.stringify(stateForLLM),
-      ].join("\n"),
-    });
+    const knownSummary = buildKnownFiltersSummary(mergedState);
 
-    // Hard reply guard: if model is known, inject a strong constraint
+    // Human-readable summary of what's already known
+    stateContextParts.push(`═══ ТЕКУЩИЙ СТАТУС РАЗГОВОРА ═══`);
+    stateContextParts.push(`ЭТАП: ${mergedState.stage}`);
+    if (knownSummary) {
+      stateContextParts.push(`УЖЕ ИЗВЕСТНО: ${knownSummary}`);
+    }
+
+    // Hard model constraint
     if (mergedState.model) {
-      stateContextMessages.push({
-        role: "system" as const,
-        content: `HARD CONSTRAINT: The client's car model is already resolved as "${mergedState.model}" (${mergedState.make ?? ""}). Do NOT ask: "какой бренд?", "какую марку?", "какую модель?", "какой тип техники?", "что вас интересует?". These questions are FORBIDDEN. Treat any new filters as updates to this model.`,
-      });
+      stateContextParts.push(
+        `\n⛔ МОДЕЛЬ ОПРЕДЕЛЕНА: ${mergedState.make ?? ""} ${mergedState.model}. ` +
+        `КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО спрашивать: «какой бренд?», «какую марку?», «какую модель?», «какой тип техники?», «что вас интересует?». ` +
+        `Все новые фильтры от клиента применяй к этой модели.`
+      );
     }
   }
 
-  // Stage-specific instructions
+  // Stage-specific instructions with clear known/missing breakdown
   if (mergedState.stage === "collecting_calc_params") {
     const missing: string[] = [];
-    if (!mergedState.auctionPriceJPY && !mergedState.budgetText) missing.push("аукционная цена в йенах или бюджет");
+    if (!mergedState.auctionPriceJPY && !mergedState.budgetText) missing.push("бюджет или аукционная цена в йенах");
     if (!mergedState.volumeCm3) missing.push("объём двигателя");
     if (!mergedState.year && !mergedState.ageWindow) missing.push("год или возрастное окно");
-    if (mergedState.isForResale == null && mergedState.isLegalEntity == null) missing.push("физ/юрлицо или перепродажа");
-    if (missing.length > 0) {
-      stateContextMessages.push({
-        role: "system" as const,
-        content: `STAGE=collecting_calc_params: Клиент хочет расчёт. Подтверди уже известные фильтры и спроси ТОЛЬКО недостающее для расчёта: ${missing.join(", ")}. НЕ задавай другие вопросы.`,
-      });
-    }
+    if (mergedState.ageWindow === "non_passable" && !mergedState.nonPassableType) missing.push("уточнить непроходной: свежий (до 3 лет) или старый (5+ лет)");
+    if (mergedState.isForResale == null && mergedState.isLegalEntity == null) missing.push("для себя (физлицо) или юрлицо/перепродажа");
+    else if (mergedState.isForResale == null) missing.push("для перепродажи или для себя");
+    else if (mergedState.isLegalEntity == null) missing.push("физлицо или юрлицо");
+
+    stateContextParts.push(
+      `\n═══ ИНСТРУКЦИЯ ═══`,
+      `Клиент хочет расчёт. Действуй так:`,
+      `1. Подтверди КОРОТКО все уже известные фильтры (одним предложением).`,
+      missing.length > 0
+        ? `2. Спроси ТОЛЬКО недостающее (максимум 2 вопроса): ${missing.slice(0, 2).join("; ")}.`
+        : `2. Все параметры собраны — вызови calculate_vehicle_price.`,
+      `3. НЕ задавай НИКАКИХ других вопросов. НЕ предлагай альтернативы.`,
+    );
   } else if (mergedState.stage === "ready_to_calculate") {
-    stateContextMessages.push({
-      role: "system" as const,
-      content: `STAGE=ready_to_calculate: Все параметры для расчёта собраны. Вызови calculate_vehicle_price. Не задавай лишних вопросов.`,
-    });
+    stateContextParts.push(
+      `\n═══ ИНСТРУКЦИЯ ═══`,
+      `Все параметры для расчёта собраны. Вызови calculate_vehicle_price. Не задавай лишних вопросов.`,
+    );
   } else if (mergedState.stage === "explaining_auction") {
-    stateContextMessages.push({
-      role: "system" as const,
-      content: `STAGE=explaining_auction: Клиент спрашивает про аукционные оценки. Объясни кратко и по делу.`,
-    });
+    stateContextParts.push(
+      `\n═══ ИНСТРУКЦИЯ ═══`,
+      `Клиент спрашивает про аукционные оценки. Объясни кратко и по делу.`,
+    );
+  } else if (mergedState.stage === "collecting_filters") {
+    // Pending question hint
+    if (mergedState.pendingQuestion) {
+      stateContextParts.push(
+        `\n═══ ИНСТРУКЦИЯ ═══`,
+        `Задай естественно (не дословно): ${mergedState.pendingQuestion}`,
+      );
+    }
   }
 
-  // Pending question hint (if the state machine determined one)
-  if (mergedState.pendingQuestion) {
-    stateContextMessages.push({
-      role: "system" as const,
-      content: `SUGGESTED NEXT QUESTION (ask naturally, not verbatim): ${mergedState.pendingQuestion}`,
-    });
-  }
-
-  // Deterministic reply plan — tells LLM what to ask / not ask
+  // Deterministic reply plan — strongest instruction for the LLM
   const replyPlan = planReply(mergedState, userMessage);
   if (replyPlan.length > 0) {
+    stateContextParts.push(
+      `\n═══ ПЛАН ОТВЕТА (выполняй СТРОГО) ═══`,
+      ...replyPlan.map(h => `• ${h}`),
+    );
+  }
+
+  // Build the state context as a single system message
+  const stateContextMessages: Array<{ role: "system"; content: string }> = [];
+  if (stateContextParts.length > 0) {
     stateContextMessages.push({
       role: "system" as const,
-      content: `REPLY PLAN (follow strictly):\n${replyPlan.map(h => `• ${h}`).join("\n")}`,
+      content: stateContextParts.join("\n"),
     });
   }
 
-  const body = {
+  // ── Determine if tools should be included ──
+  const includeTools = mergedState.activeIntent === "price_calc";
+
+  const body: Record<string, unknown> = {
     model: MODEL,
     messages: [
       { role: "system", content: LOCAL_SYSTEM_PROMPT },
@@ -1878,18 +1893,24 @@ PARSED INTENT (структурированный разбор)
       ...recentMessages,
       { role: "user", content: userMessage }
     ],
-    temperature: 0.7,
-    max_tokens: 300
+    temperature: TEMPERATURE,
+    max_tokens: MAX_TOKENS,
+  };
+
+  if (includeTools) {
+    body.tools = tools;
+  }
+
+  const headers = {
+    "Authorization": `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+    "HTTP-Referer": "http://localhost:3001",
+    "X-OpenRouter-Title": "SpecTechMash Telegram Bot"
   };
 
   const response = await fetch(OPENROUTER_API_URL, {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "http://localhost:3001",
-      "X-OpenRouter-Title": "SpecTechMash Telegram Bot"
-    },
+    headers,
     body: JSON.stringify(body)
   });
 
@@ -1900,15 +1921,117 @@ PARSED INTENT (структурированный разбор)
     throw new Error(`OpenRouter API error: ${response.status} ${response.statusText}`);
   }
 
-  let data: any;
+  let data: Record<string, unknown>;
   try {
     data = JSON.parse(rawText);
-  } catch (e) {
+  } catch {
     console.error("❌ Failed to parse OpenRouter response:", rawText);
     throw new Error("OpenRouter returned invalid JSON");
   }
 
-  const content = data?.choices?.[0]?.message?.content;
+  // ── Handle tool calls ──
+  const choices = data?.choices as Array<{ message?: { content?: string; tool_calls?: ToolCall[] } }> | undefined;
+  const firstMessage = choices?.[0]?.message;
+  const toolCalls = firstMessage?.tool_calls;
+
+  if (toolCalls && toolCalls.length > 0) {
+    // Execute tool calls and collect results
+    const toolResults: Array<{ role: "tool"; tool_call_id: string; content: string }> = [];
+
+    for (const tc of toolCalls) {
+      if (tc.function.name === "calculate_vehicle_price") {
+        try {
+          const args = JSON.parse(tc.function.arguments) as {
+            vehicleType?: string;
+            priceJPY?: number;
+            volumeCm3?: number;
+            ageYears?: number;
+            isForResale?: boolean;
+            isLegalEntity?: boolean;
+          };
+
+          // Validate required numeric params — reject if missing to avoid nonsense calculations
+          if (args.priceJPY == null || args.volumeCm3 == null || args.ageYears == null) {
+            toolResults.push({
+              role: "tool",
+              tool_call_id: tc.id,
+              content: JSON.stringify({ error: "Недостаточно данных для расчёта: нужны цена в йенах, объём двигателя и возраст." }),
+            });
+            continue;
+          }
+
+          const calcParams: CalcParams = {
+            vehicleType: (args.vehicleType as CalcParams["vehicleType"]) ?? "car",
+            priceJPY: args.priceJPY,
+            volumeCm3: args.volumeCm3,
+            ageYears: args.ageYears,
+            isForResale: args.isForResale ?? false,
+            isLegalEntity: args.isLegalEntity ?? false,
+          };
+
+          const result = await calculateTurnkeyPrice(calcParams);
+          toolResults.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            content: JSON.stringify(result),
+          });
+        } catch (err) {
+          console.error("❌ Tool call error:", err);
+          toolResults.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            content: JSON.stringify({ error: "Ошибка при расчёте. Попробуйте позже." }),
+          });
+        }
+      }
+    }
+
+    // Send tool results back to the LLM for human-readable formatting
+    const followUpMessages = [
+      ...(body.messages as ChatMessage[]),
+      { role: "assistant" as const, content: firstMessage?.content ?? null, tool_calls: toolCalls },
+      ...toolResults,
+    ];
+
+    const followUpBody = {
+      model: MODEL,
+      messages: followUpMessages,
+      temperature: TEMPERATURE,
+      max_tokens: MAX_TOKENS,
+    };
+
+    const followUpResponse = await fetch(OPENROUTER_API_URL, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(followUpBody),
+    });
+
+    const followUpRawText = await followUpResponse.text();
+    if (!followUpResponse.ok) {
+      console.error(`❌ OpenRouter follow-up error ${followUpResponse.status}: ${followUpRawText}`);
+      throw new Error(`OpenRouter follow-up error: ${followUpResponse.status}`);
+    }
+
+    let followUpData: Record<string, unknown>;
+    try {
+      followUpData = JSON.parse(followUpRawText);
+    } catch {
+      console.error("❌ Failed to parse follow-up response:", followUpRawText);
+      throw new Error("OpenRouter follow-up returned invalid JSON");
+    }
+
+    const followUpChoices = followUpData?.choices as Array<{ message?: { content?: string } }> | undefined;
+    const followUpContent = followUpChoices?.[0]?.message?.content;
+    if (followUpContent && typeof followUpContent === "string") {
+      return followUpContent.trim();
+    }
+
+    // Fallback: return tool result summary directly
+    return "Расчёт выполнен. Свяжитесь с менеджером для уточнения деталей.";
+  }
+
+  // ── Normal text response (no tool calls) ──
+  const content = firstMessage?.content;
 
   if (!content || typeof content !== "string") {
     console.error("❌ Unexpected OpenRouter response shape:", data);
