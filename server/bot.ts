@@ -167,7 +167,7 @@ setInterval(() => {
 function getMemory(userId: number): ConversationEntry {
   let entry = conversations.get(userId);
   if (!entry) {
-    entry = { summary: "", messages: [], lastActivity: Date.now(), parsedIntent: { ...DEFAULT_PARSED_INTENT, auctionGradesAllowed: [], needsClarification: [], notes: [] } };
+    entry = { summary: "", messages: [], lastActivity: Date.now(), parsedIntent: { ...DEFAULT_PARSED_INTENT } };
     conversations.set(userId, entry);
   }
   entry.lastActivity = Date.now();
@@ -177,7 +177,7 @@ function getMemory(userId: number): ConversationEntry {
 /** Detect short follow-up messages that refine the current car, not a fresh search */
 function isFollowUpFilter(message: string): boolean {
   const trimmed = message.trim();
-  // Short messages (under ~60 chars) that don't name a new car model are likely follow-ups
+  // Short messages (under ~80 chars) that don't name a new car model are likely follow-ups
   if (trimmed.length > 80) return false;
   const followUpPatterns = [
     /^(любой|любая|любое)\b/i,
@@ -226,8 +226,8 @@ function mergeParsedIntent(
   };
 
   // For needsClarification: remove items that are now resolved
+  // NOTE: keys here must match field names in ParsedCarIntent
   const mergedClarification = previous.needsClarification.filter((item) => {
-    // If current provided a value for this field, remove from clarification
     const fieldMap: Record<string, unknown> = {
       nonPassableType: current.nonPassableType,
       drivetrain: current.drivetrain,
