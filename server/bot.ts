@@ -1922,12 +1922,27 @@ async function getAIResponse(chatId: number, userMessage: string): Promise<strin
   try {
     let reply = await chatCompletion(chatId, userMessage);
 
-    // Post-reply guard: if model is known and reply asks about model/brand, strip the offending part
+    // Post-reply guard: if model is known and reply asks about model/brand,
+    // strip the offending phrases rather than re-calling the LLM
     const mem = getMemory(chatId);
     if (violatesKnownModelGuard(reply, mem.state)) {
-      console.warn("⚠️ Post-reply guard triggered: reply asks about known model, regenerating...");
-      // Inject a corrective system message and re-call
-      reply = await chatCompletion(chatId, userMessage);
+      console.warn("⚠️ Post-reply guard triggered: stripping forbidden model questions from reply");
+      const forbidden = [
+        /какая марка[?？]?/gi,
+        /какая модель[?？]?/gi,
+        /какой автомобиль вас интересует[?？]?/gi,
+        /что вы имеете в виду[?？]?/gi,
+        /какой бренд[?？]?/gi,
+        /какую марку[?？]?/gi,
+        /какую модель[?？]?/gi,
+        /какой тип техники[?？]?/gi,
+        /что вас интересует[?？]?/gi,
+      ];
+      for (const pattern of forbidden) {
+        reply = reply.replace(pattern, "").trim();
+      }
+      // Clean up double spaces and dangling punctuation
+      reply = reply.replace(/\s{2,}/g, " ").replace(/^\s*[,;]\s*/, "").trim();
     }
 
     // Save user + assistant messages to history only on success
