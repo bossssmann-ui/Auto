@@ -538,6 +538,167 @@ function violatesKnownModelGuard(reply: string, state: ConversationState): boole
   return forbidden.some(phrase => lower.includes(phrase));
 }
 
+/**
+ * Response validation: checks if the reply contradicts known parsed state.
+ * Returns true if the reply contains false claims or re-asks known slots.
+ */
+function replyContradictsState(reply: string, state: ConversationState): boolean {
+  const lower = reply.toLowerCase();
+
+  // 1. If model is known, reply must not call it a brand/type or say it's unclear
+  if (state.model) {
+    const modelLower = state.model.toLowerCase();
+    const brandClaims = [
+      `${modelLower} — это бренд`, `${modelLower} - это бренд`,
+      `${modelLower} это бренд`, `${modelLower} является брендом`,
+      `${modelLower} — это марка`, `${modelLower} - это марка`,
+      `${modelLower} это марка`, `${modelLower} является маркой`,
+    ];
+    if (brandClaims.some(p => lower.includes(p))) return true;
+
+    const modelUnclear = [
+      "не понял какую модель", "какую модель вы имеете",
+      "уточните модель", "какая именно модель",
+    ];
+    if (modelUnclear.some(p => lower.includes(p))) return true;
+  }
+
+  // 2. If ageWindow=non_passable, reply must not redefine it as mileage/condition
+  //    e.g. "непроходной означает малый пробег" — wrong; it means customs age window
+  if (state.ageWindow === "non_passable") {
+    if (
+      /(?:непроходн|не\s*проходн)[а-яё]*\s[^.]*?(?:пробег|состояни|километр|малый\s+пробег|хорош[а-яё]*\s+состояни)/i.test(reply)
+    ) {
+      return true;
+    }
+  }
+
+  // 3. If drivetrain known, reply should not re-ask about it
+  if (state.drivetrain) {
+    const driveQuestions = [
+      "какой привод", "какую систему привода",
+      "полный привод или передний", "передний или полный",
+      "какой тип привода", "полный или передний привод",
+    ];
+    if (driveQuestions.some(p => lower.includes(p))) return true;
+  }
+
+  // 4. If trimLevel known, reply should not re-ask about it
+  if (state.trimLevel) {
+    const trimQuestions = [
+      "какая комплектация", "какую комплектацию",
+      "базовую или максимальную", "базовая или максимальная",
+      "какой уровень оснащения",
+    ];
+    if (trimQuestions.some(p => lower.includes(p))) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Deterministic fallback response builder.
+ * Used when LLM reply contradicts parsed state.
+ * Confirms known slots and asks only calc-critical missing fields.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function buildSafeFallbackReply(state: ConversationState, _plan: string[]): string {
+  const parts: string[] = [];
+
+  // ── Collect known filter descriptions ──
+  const knownParts: string[] = [];
+
+  if (state.ageWindow === "non_passable") {
+    if (state.nonPassableType === "under_3_years") knownParts.push("непроходной (до 3 лет)");
+    else if (state.nonPassableType === "over_5_years") knownParts.push("непроходной (старше 5 лет)");
+    else knownParts.push("непроходной");
+  } else if (state.ageWindow === "passable") {
+    knownParts.push("проходной (3–5 лет)");
+  }
+  if (state.year) knownParts.push(`${state.year} год`);
+
+  if (state.drivetrain === "fwd") knownParts.push("передний привод");
+  else if (state.drivetrain === "rwd") knownParts.push("задний привод");
+  else if (state.drivetrain === "4wd") knownParts.push("полный привод");
+
+  if (state.trimLevel === "base") knownParts.push("база");
+  else if (state.trimLevel === "mid") knownParts.push("средняя комплектация");
+  else if (state.trimLevel === "top") knownParts.push("максималка");
+
+  if (state.auctionGradesAllowed.length > 0) {
+    knownParts.push(`${state.auctionGradesAllowed.join(", ")} допускается`);
+  }
+  if (state.auctionGradeMin) knownParts.push(`оценка от ${state.auctionGradeMin}`);
+
+  if (state.fuelType === "hybrid") knownParts.push("гибрид");
+  else if (state.fuelType === "diesel") knownParts.push("дизель");
+  else if (state.fuelType === "ev") knownParts.push("электро");
+
+  if (state.color) knownParts.push(state.color);
+  if (state.budgetText) knownParts.push(`бюджет: ${state.budgetText}`);
+  if (state.auctionPriceJPY) knownParts.push(`аукц. цена: ${state.auctionPriceJPY} йен`);
+  if (state.volumeCm3) knownParts.push(`объём: ${state.volumeCm3} см³`);
+  if (state.isForResale != null) knownParts.push(state.isForResale ? "для перепродажи" : "для себя");
+  if (state.isLegalEntity != null) knownParts.push(state.isLegalEntity ? "юрлицо" : "физлицо");
+  if (state.priority === "cheapest") knownParts.push("подешевле");
+  else if (state.priority === "best_condition") knownParts.push("лучшее состояние");
+
+  // ── Build confirmation line ──
+  const modelName = state.model
+    ? (state.make ? `${state.make} ${state.model}` : state.model)
+    : state.make ?? null;
+
+  if (modelName && knownParts.length > 0) {
+    parts.push(`По ${modelName} понял: ${knownParts.join(", ")}.`);
+  } else if (modelName) {
+    parts.push(`По ${modelName} — понял.`);
+  } else if (knownParts.length > 0) {
+    parts.push(`Понял: ${knownParts.join(", ")}.`);
+  }
+
+  // ── Build missing calc-critical fields ──
+  const missingQuestions: string[] = [];
+
+  if (state.activeIntent === "price_calc") {
+    if (state.ageWindow === "non_passable" && !state.nonPassableType) {
+      missingQuestions.push("это свежий до 3 лет или старше 5 лет");
+    }
+    if (!state.year && !state.ageWindow) {
+      missingQuestions.push("какой год или возрастное окно");
+    }
+    if (!state.auctionPriceJPY && !state.budgetText) {
+      missingQuestions.push("какая цена на аукционе в йенах или бюджет");
+    }
+    if (!state.volumeCm3) {
+      missingQuestions.push("какой объём двигателя");
+    }
+    if (state.isForResale == null && state.isLegalEntity == null) {
+      missingQuestions.push("оформление на физлицо / юрлицо / перепродажу");
+    } else {
+      if (state.isForResale == null) missingQuestions.push("для перепродажи или для себя");
+      if (state.isLegalEntity == null) missingQuestions.push("физлицо или юрлицо");
+    }
+  } else if (state.activeIntent === "car_search") {
+    if (!state.model && !state.make) {
+      missingQuestions.push("какая модель или марка");
+    }
+    if (!state.year && !state.ageWindow) {
+      missingQuestions.push("какой возраст или год");
+    }
+    if (!state.budgetText) {
+      missingQuestions.push("какой бюджет");
+    }
+  }
+
+  if (missingQuestions.length > 0) {
+    parts.push(`Уточни только: ${missingQuestions.join(", ")}.`);
+  } else if (state.stage === "ready_to_calculate") {
+    parts.push("Все данные есть, сейчас посчитаю.");
+  }
+
+  return parts.join(" ") || "Расскажите подробнее, что именно вас интересует?";
+}
+
 interface ConversationEntry {
   summary: string;
   messages: ChatMessage[];
@@ -2045,27 +2206,15 @@ async function getAIResponse(chatId: number, userMessage: string): Promise<strin
   try {
     let reply = await chatCompletion(chatId, userMessage);
 
-    // Post-reply guard: if model is known and reply asks about model/brand,
-    // strip the offending phrases rather than re-calling the LLM
+    // Post-reply validation: if LLM reply contradicts parsed state, use deterministic fallback
     const mem = getMemory(chatId);
-    if (violatesKnownModelGuard(reply, mem.state)) {
-      console.warn("⚠️ Post-reply guard triggered: stripping forbidden model questions from reply");
-      const forbidden = [
-        /какая марка[?？]?/gi,
-        /какая модель[?？]?/gi,
-        /какой автомобиль вас интересует[?？]?/gi,
-        /что вы имеете в виду[?？]?/gi,
-        /какой бренд[?？]?/gi,
-        /какую марку[?？]?/gi,
-        /какую модель[?？]?/gi,
-        /какой тип техники[?？]?/gi,
-        /что вас интересует[?？]?/gi,
-      ];
-      for (const pattern of forbidden) {
-        reply = reply.replace(pattern, "").trim();
-      }
-      // Clean up double spaces and dangling punctuation
-      reply = reply.replace(/\s{2,}/g, " ").replace(/^\s*[,;]\s*/, "").trim();
+    if (
+      violatesKnownModelGuard(reply, mem.state) ||
+      replyContradictsState(reply, mem.state)
+    ) {
+      console.warn("⚠️ Reply contradicts parsed state — using deterministic fallback");
+      const plan = planReply(mem.state, userMessage);
+      reply = buildSafeFallbackReply(mem.state, plan);
     }
 
     // Save user + assistant messages to history only on success
