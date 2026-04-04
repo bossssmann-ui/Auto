@@ -315,7 +315,7 @@ function buildPendingQuestion(state: ConversationState): string | null {
     if (field === "nonPassableType") {
       return "Непроходной — имеете в виду свежий (до 3 лет) или старше 5 лет?";
     }
-    return null; // generic clarification handled by LLM
+    // Other clarification types fall through to stage-specific questions below
   }
 
   if (state.stage === "collecting_calc_params") {
@@ -421,7 +421,6 @@ function buildKnownFiltersSummary(state: ConversationState): string {
  * Returns null if any required field is missing — does NOT fake values.
  * auctionPriceJPY is mandatory; budgetText is NOT a substitute.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function buildCalcParamsFromState(state: ConversationState): CalcParams | null {
   if (state.auctionPriceJPY == null) return null;
   if (state.volumeCm3 == null) return null;
@@ -1245,6 +1244,15 @@ function extractStateUpdate(
     update.ageWindow = "passable";
   }
 
+  // Context-aware: standalone "свежий"/"старше" when nonPassableType is pending clarification
+  if (previousState.ageWindow === "non_passable" && !previousState.nonPassableType && !update.nonPassableType && !update.ageWindow) {
+    if (/(?:свеж|до\s*3|менее\s*3|младше\s*3|молод)/i.test(msg)) {
+      update.nonPassableType = "under_3_years";
+    } else if (/(?:стар|больше\s*5|более\s*5|старше\s*5|свыше\s*5)/i.test(msg)) {
+      update.nonPassableType = "over_5_years";
+    }
+  }
+
   // Drivetrain
   if (/(?:передн(?:ий|яя)?\s*привод|передн(?:ий|яя)?(?:\s|$))/i.test(msg)) {
     update.drivetrain = "fwd";
@@ -1296,12 +1304,20 @@ function extractStateUpdate(
   }
 
   // Resale / legal entity
-  if (/(?:перепродаж|на\s+продажу|для\s+продажи)/i.test(msg)) {
+  // "для себя" implies both personal use (not for resale) and physical entity
+  if (/(?:для\s+себя)/i.test(msg)) {
+    update.isForResale = false;
+    update.isLegalEntity = false;
+  }
+  // Check negation BEFORE positive to avoid "не для перепродажи" matching positive
+  if (/(?:не\s+(?:для\s+)?перепродаж|не\s+на\s+продажу|не\s+для\s+продажи)/i.test(msg)) {
+    update.isForResale = false;
+  } else if (/(?:перепродаж|на\s+продажу|для\s+продажи)/i.test(msg)) {
     update.isForResale = true;
   }
   if (/(?:юрлиц|юр\.\s*лиц|для\s+компании|ооо|ип\b)/i.test(msg)) {
     update.isLegalEntity = true;
-  } else if (/(?:физлиц|физ\.\s*лиц|для\s+себя)/i.test(msg)) {
+  } else if (/(?:физлиц|физ\.\s*лиц)/i.test(msg)) {
     update.isLegalEntity = false;
   }
 
@@ -1404,6 +1420,35 @@ function extractStateUpdate(
     }
   }
 
+  // Fallback volume: with unit but no prefix keyword (e.g., "1.5 литра", "1500 куб")
+  if (!update.volumeCm3) {
+    // Note: trailing \b removed — JS \b doesn't match Cyrillic word boundaries
+    const volumeFallback = msg.match(/\b([\d]+[.,][\d]+)\s*(?:л(?:итр[аов]?)?)(?:\s|$|[.,])/i)
+      ?? msg.match(/\b(\d{3,5})\s*(?:куб(?:\.\s*см)?|см3|cc)(?:\s|$|[.,])/i);
+    if (volumeFallback) {
+      const volStr = volumeFallback[1].replace(",", ".");
+      const volNum = parseFloat(volStr);
+      if (volNum > 0 && volNum < 10) {
+        update.volumeCm3 = Math.round(volNum * 1000);
+      } else if (volNum >= 100 && volNum <= 10000) {
+        update.volumeCm3 = Math.round(volNum);
+      }
+    }
+  }
+
+  // Context-aware: bare number when volume is the pending question
+  if (!update.volumeCm3 && previousState.pendingQuestion && /объ[её]м/i.test(previousState.pendingQuestion)) {
+    const bareVol = msg.match(/^\s*([\d]+[.,]?[\d]*)\s*$/);
+    if (bareVol) {
+      const v = parseFloat(bareVol[1].replace(",", "."));
+      if (v > 0 && v < 10) {
+        update.volumeCm3 = Math.round(v * 1000);
+      } else if (v >= 100 && v <= 10000) {
+        update.volumeCm3 = Math.round(v);
+      }
+    }
+  }
+
   // ── Auction price in JPY ──
   const jpyMatch = msg.match(/([\d.,]+)\s*(?:тыс(?:яч)?\s+)?(?:йен|иен|¥|jpy)/i);
   if (jpyMatch) {
@@ -1414,6 +1459,17 @@ function extractStateUpdate(
     }
     if (price > 0) {
       update.auctionPriceJPY = Math.round(price);
+    }
+  }
+
+  // Context-aware: bare number when auction price/budget is the pending question
+  if (!update.auctionPriceJPY && previousState.pendingQuestion && /(?:цен|бюджет|йен)/i.test(previousState.pendingQuestion)) {
+    const barePrice = msg.match(/^\s*([\d][\d\s.,]*)\s*$/);
+    if (barePrice) {
+      const v = parseFloat(barePrice[1].replace(/[\s,]/g, ""));
+      if (v >= 1000) {
+        update.auctionPriceJPY = Math.round(v);
+      }
     }
   }
 
@@ -1442,7 +1498,11 @@ Return ONLY valid JSON matching this schema — no markdown, no code fences, no 
   "auctionGradesAllowed": string[],
   "mileageText": string | null,
   "budgetText": string | null,
-  "priority": "cheapest" | "best_condition" | "balanced" | null
+  "priority": "cheapest" | "best_condition" | "balanced" | null,
+  "volumeCm3": number | null,
+  "auctionPriceJPY": number | null,
+  "isForResale": boolean | null,
+  "isLegalEntity": boolean | null
 }
 
 CRITICAL SLANG RULES (use SEPARATE make and model fields — never combine them):
@@ -1484,6 +1544,14 @@ FILTER RULES:
 - "не больше 4.5" / "минимум 4" → auctionGradeMin (e.g. "4.5", "4")
 - "до 100 тысяч пробег" / "пробег до 80к" → mileageText (as free text, e.g. "до 100 тыс. км")
 
+CALC-CRITICAL FIELDS:
+- "объём 1.5 литра" / "1.5л" / "1500 куб" → volumeCm3=1500 (always in cm³; if given in liters, multiply by 1000)
+- "500000 йен" / "500 тысяч йен" → auctionPriceJPY=500000 (always in whole JPY)
+- "для перепродажи" / "на продажу" → isForResale=true
+- "для себя" / "не для перепродажи" → isForResale=false
+- "юрлицо" / "ООО" / "ИП" → isLegalEntity=true
+- "физлицо" / "для себя" → isLegalEntity=false
+
 If the message is not about cars at all, return activeIntent="other" with all other fields null/empty.
 Return ONLY the JSON object. No other text.`;
 
@@ -1499,6 +1567,10 @@ async function extractStateUpdateWithLLM(
       ? `\nCurrent active car in conversation: ${previousState.make ?? ""} ${previousState.model}. If the user message is a short follow-up, preserve this model.`
       : "";
 
+    const pendingHint = previousState.pendingQuestion
+      ? `\nThe bot just asked the user: "${previousState.pendingQuestion}". Interpret the user's response in this context.`
+      : "";
+
     const response = await fetch(OPENROUTER_API_URL, {
       method: "POST",
       headers: {
@@ -1510,7 +1582,7 @@ async function extractStateUpdateWithLLM(
       body: JSON.stringify({
         model: MODEL,
         messages: [
-          { role: "system", content: PARSER_SYSTEM_PROMPT + contextHint },
+          { role: "system", content: PARSER_SYSTEM_PROMPT + contextHint + pendingHint },
           { role: "user", content: userMessage },
         ],
         temperature: 0,
@@ -1565,6 +1637,15 @@ async function extractStateUpdateWithLLM(
     if (parsed.mileageText) result.mileageText = parsed.mileageText;
     if (parsed.budgetText) result.budgetText = parsed.budgetText;
     if (parsed.priority) result.priority = parsed.priority;
+    // Calc-critical fields
+    if (typeof parsed.volumeCm3 === "number" && parsed.volumeCm3 > 0) {
+      result.volumeCm3 = parsed.volumeCm3 < 15 ? Math.round(parsed.volumeCm3 * 1000) : Math.round(parsed.volumeCm3);
+    }
+    if (typeof parsed.auctionPriceJPY === "number" && parsed.auctionPriceJPY > 0) {
+      result.auctionPriceJPY = Math.round(parsed.auctionPriceJPY);
+    }
+    if (typeof parsed.isForResale === "boolean") result.isForResale = parsed.isForResale;
+    if (typeof parsed.isLegalEntity === "boolean") result.isLegalEntity = parsed.isLegalEntity;
     // needsClarification is NOT extracted — always computed from state via computeNeedsClarification
 
     return { set: result, clearFields: [] };
@@ -1907,30 +1988,34 @@ PARSED INTENT (структурированный разбор)
 • Короткие уточняющие сообщения клиента (цвет, привод, комплектация) — это дополнения к текущей модели, а НЕ новый запрос.
 `.trim();
 
-  // ── Deterministic parser first, LLM fallback only when needed ──
+  // ── Deterministic parser first, then LLM fallback if needed ──
   const mem = getMemory(chatId);
 
   // Step 1: deterministic extraction (instant, no API call)
   const deterministicUpdate = extractStateUpdate(userMessage, mem.state);
 
-  // Step 2: decide if LLM fallback is needed
-  // Use LLM only when deterministic parser found nothing meaningful AND message is not a simple follow-up
+  // Step 2: check if deterministic parser found anything meaningful
   const detSet = deterministicUpdate.set;
   const hasSubstantiveUpdate = !!(
     detSet.model || detSet.make ||
-    detSet.drivetrain || detSet.ageWindow ||
+    detSet.drivetrain || detSet.ageWindow || detSet.nonPassableType ||
     detSet.fuelType || detSet.trimLevel ||
-    detSet.year || detSet.color ||
+    detSet.year || detSet.color || detSet.steering ||
     detSet.activeIntent || detSet.auctionGradeMin ||
     (detSet.auctionGradesAllowed && detSet.auctionGradesAllowed.length > 0) ||
-    detSet.budgetText || detSet.priority ||
-    detSet.volumeCm3 || detSet.auctionPriceJPY
+    detSet.budgetText || detSet.priority || detSet.mileageText ||
+    detSet.volumeCm3 || detSet.auctionPriceJPY ||
+    detSet.isForResale != null || detSet.isLegalEntity != null
   );
 
   let combinedUpdate: StateUpdate = deterministicUpdate;
   let mergeSource: "regex" | "llm" = "regex";
 
-  if (!hasSubstantiveUpdate && deterministicUpdate.clearFields.length === 0 && !isFollowUpFilter(userMessage)) {
+  // Step 3: LLM fallback — when deterministic parser found nothing AND:
+  //   - message is not a simple follow-up, OR
+  //   - we're in collecting_calc_params stage (short answers to calc questions need LLM interpretation)
+  if (!hasSubstantiveUpdate && deterministicUpdate.clearFields.length === 0
+      && (!isFollowUpFilter(userMessage) || mem.state.stage === "collecting_calc_params")) {
     // Deterministic parser found nothing — try LLM as backup
     const llmUpdate = await extractStateUpdateWithLLM(userMessage, mem.state);
     // Deterministic parser always takes precedence; LLM fills remaining gaps
@@ -2026,6 +2111,26 @@ PARSED INTENT (структурированный разбор)
     );
   }
 
+  // ── Auto-calculate when all params are ready ──
+  // Use buildCalcParamsFromState directly instead of relying on LLM making the correct tool call
+  let autoCalcDone = false;
+  if (mergedState.stage === "ready_to_calculate") {
+    const calcParams = buildCalcParamsFromState(mergedState);
+    if (calcParams) {
+      try {
+        const calcResult = await calculateTurnkeyPrice(calcParams);
+        stateContextParts.push(
+          `\n═══ РЕЗУЛЬТАТ РАСЧЁТА (выполнен автоматически) ═══`,
+          JSON.stringify(calcResult, null, 2),
+          `Распиши этот результат клиенту понятно и красиво по-русски. НЕ вызывай calculate_vehicle_price — расчёт уже сделан.`,
+        );
+        autoCalcDone = true;
+      } catch (err) {
+        console.error("❌ Auto-calculate error:", err);
+      }
+    }
+  }
+
   // Build the state context as a single system message
   const stateContextMessages: Array<{ role: "system"; content: string }> = [];
   if (stateContextParts.length > 0) {
@@ -2036,7 +2141,8 @@ PARSED INTENT (структурированный разбор)
   }
 
   // ── Determine if tools should be included ──
-  const includeTools = mergedState.activeIntent === "price_calc";
+  // Skip tools when auto-calc already produced a result
+  const includeTools = mergedState.activeIntent === "price_calc" && !autoCalcDone;
 
   const body: Record<string, unknown> = {
     model: MODEL,
