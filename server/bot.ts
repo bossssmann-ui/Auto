@@ -315,7 +315,7 @@ function buildPendingQuestion(state: ConversationState): string | null {
     if (field === "nonPassableType") {
       return "Непроходной — имеете в виду свежий (до 3 лет) или старше 5 лет?";
     }
-    return null; // generic clarification handled by LLM
+    // Other clarification types fall through to stage-specific questions below
   }
 
   if (state.stage === "collecting_calc_params") {
