@@ -122,6 +122,33 @@ interface SlotMeta {
   turnIndex: number;
 }
 
+type SlotKey =
+  | "activeIntent"
+  | "model" | "make" | "generation" | "body"
+  | "year" | "yearText"
+  | "ageWindow" | "nonPassableType"
+  | "drivetrain" | "steering"
+  | "fuelType" | "trimLevel"
+  | "color" | "mileageText"
+  | "auctionGradeMin" | "auctionGradesAllowed"
+  | "budgetText" | "auctionPriceJPY" | "volumeCm3"
+  | "isForResale" | "isLegalEntity"
+  | "priority"
+  | "lastResolvedModelAlias";
+
+type ClearableField =
+  | "color"
+  | "trimLevel"
+  | "drivetrain"
+  | "fuelType"
+  | "auctionGradeMin"
+  | "auctionGradesAllowed";
+
+interface StateUpdate {
+  set: Partial<ConversationState>;
+  clearFields: ClearableField[];
+}
+
 // ── Conversation state (parser-first pipeline) ───────────
 interface ConversationState {
   stage: ConversationStage;
@@ -166,7 +193,7 @@ interface ConversationState {
   lastResolvedModelAlias: string | null;
   turnIndex: number;
 
-  slotMeta: Partial<Record<keyof ConversationState, SlotMeta>>;
+  slotMeta: Partial<Record<SlotKey, SlotMeta>>;
 }
 
 const DEFAULT_CONVERSATION_STATE: ConversationState = {
@@ -251,7 +278,41 @@ function deriveImpliedState(state: ConversationState): void {
   }
 }
 
-/** Compute next stage based on current intent and filled slots */
+/**
+ * Build the needsClarification array from scratch every turn.
+ * Never reuses old clarification arrays — purely derived from current state.
+ */
+function computeNeedsClarification(state: ConversationState): string[] {
+  const missing: string[] = [];
+
+  if ((state.activeIntent === "car_search" || state.activeIntent === "price_calc") && !state.model) {
+    missing.push("model");
+  }
+
+  if (state.ageWindow === "non_passable" && !state.nonPassableType) {
+    missing.push("nonPassableType");
+  }
+
+  if (state.activeIntent === "price_calc") {
+    if (state.auctionPriceJPY == null && !state.budgetText) {
+      missing.push("priceOrBudget");
+    }
+    if (state.volumeCm3 == null) {
+      missing.push("volumeCm3");
+    }
+    if (state.year == null && state.ageWindow == null) {
+      missing.push("yearOrAgeWindow");
+    }
+    if (state.isForResale == null) {
+      missing.push("isForResale");
+    }
+    if (state.isLegalEntity == null) {
+      missing.push("isLegalEntity");
+    }
+  }
+
+  return missing;
+}
 function computeNextStage(state: ConversationState): ConversationStage {
   if (state.activeIntent === "other" && !state.model) {
     return "idle";
@@ -397,19 +458,42 @@ function isFollowUpFilter(message: string): boolean {
   return followUpPatterns.some((p) => p.test(trimmed));
 }
 
-/** On model switch, preserve metadata only for slots that are NOT model-dependent */
-function preserveNonDependentMeta(
-  meta: Partial<Record<keyof ConversationState, SlotMeta>>,
-): Partial<Record<keyof ConversationState, SlotMeta>> {
-  const kept: Partial<Record<keyof ConversationState, SlotMeta>> = {};
-  const nonDependent: Array<keyof ConversationState> = [
-    "drivetrain", "steering", "fuelType", "color",
-    "priority", "isForResale", "isLegalEntity",
-  ];
-  for (const key of nonDependent) {
-    if (meta[key]) kept[key] = meta[key];
+/**
+ * On model switch, clear all model-dependent slots.
+ * Preserve only: budgetText, isForResale, isLegalEntity.
+ * SlotMeta is preserved only for the global fields that survive.
+ */
+function clearStateForModelSwitch(previous: ConversationState): ConversationState {
+  const preservedMetaKeys: SlotKey[] = ["budgetText", "isForResale", "isLegalEntity"];
+  const keptMeta: Partial<Record<SlotKey, SlotMeta>> = {};
+  for (const key of preservedMetaKeys) {
+    if (previous.slotMeta[key]) keptMeta[key] = previous.slotMeta[key];
   }
-  return kept;
+
+  return {
+    ...previous,
+    generation: null,
+    body: null,
+    year: null,
+    yearText: null,
+    ageWindow: null,
+    nonPassableType: null,
+    drivetrain: null,
+    steering: null,
+    fuelType: null,
+    trimLevel: null,
+    color: null,
+    mileageText: null,
+    auctionGradeMin: null,
+    auctionGradesAllowed: [],
+    auctionPriceJPY: null,
+    volumeCm3: null,
+    priority: null,
+    pendingQuestion: null,
+    needsClarification: [],
+    // budgetText, isForResale, isLegalEntity are preserved via spread
+    slotMeta: keptMeta,
+  };
 }
 
 /** Map extraction source to default confidence */
@@ -418,22 +502,24 @@ function sourceConfidence(src: "regex" | "llm" | "user_explicit"): "high" | "med
 }
 
 /**
- * Merge current turn's extracted update into the persistent conversation state.
+ * Apply a state update to the persistent conversation state.
  *
- * Key behaviors:
- * 1. Model switch detection — when the user names a *different* model, reset
- *    all model-dependent slots (generation, body, year, auction price, etc.)
- * 2. Intent preservation — short follow-ups keep the previous intent.
- * 3. Clarification lifecycle — resolved items are removed, new ones added.
- * 4. Slot meta tracking — record source/confidence/turn for each slot.
- * 5. After merge: derive implied state, compute stage, build pending question.
+ * Pipeline:
+ * 1. Detect model switch → reset dependent slots
+ * 2. Apply clearFields (deterministic clears for "любой цвет" etc.)
+ * 3. Apply set values
+ * 4. Derive implied state
+ * 5. Recompute needsClarification from scratch
+ * 6. Derive stage from scratch
+ * 7. Build pendingQuestion
  */
-function mergeConversationState(
+function applyStateUpdate(
   previous: ConversationState,
-  current: Partial<ConversationState>,
+  update: StateUpdate,
   source: "regex" | "llm" | "user_explicit",
 ): ConversationState {
   const nextTurn = previous.turnIndex + 1;
+  const { set: current, clearFields } = update;
 
   // ── Intent resolution ──
   const currentIntent = current.activeIntent ?? "other";
@@ -455,49 +541,29 @@ function mergeConversationState(
     previous.model != null &&
     incomingModel.toLowerCase() !== previous.model.toLowerCase();
 
-  // For model/make: never erase if current omitted them
-  const model = current.model ?? previous.model;
-  const make = current.make ?? previous.make;
-
-  // Merge arrays by union (deduplicated)
-  const mergeArrays = (prev: string[], cur: string[] | undefined): string[] => {
-    if (!cur || cur.length === 0) return prev;
-    const set = new Set([...prev, ...cur]);
-    return [...set];
-  };
-
-  // ── Clarification lifecycle ──
-  // Remove items that are now resolved by incoming update
-  const mergedClarification = previous.needsClarification.filter((item) => {
-    const fieldMap: Record<string, unknown> = {
-      nonPassableType: current.nonPassableType,
-      drivetrain: current.drivetrain,
-      fuelType: current.fuelType,
-      trimLevel: current.trimLevel,
-      budgetText: current.budgetText,
-      ageWindow: current.ageWindow,
-      year: current.year,
-      color: current.color,
-      mileageText: current.mileageText,
-      auctionGradeMin: current.auctionGradeMin,
-      steering: current.steering,
-      volumeCm3: current.volumeCm3,
-      auctionPriceJPY: current.auctionPriceJPY,
-    };
-    return !(item in fieldMap && fieldMap[item] != null);
-  });
-  // Add new clarifications
-  for (const item of current.needsClarification ?? []) {
-    if (!mergedClarification.includes(item)) {
-      mergedClarification.push(item);
-    }
+  // ── Step 1: Start from previous or model-switch-reset base ──
+  let base: ConversationState;
+  if (isModelSwitch) {
+    base = clearStateForModelSwitch(previous);
+  } else {
+    base = { ...previous, slotMeta: { ...previous.slotMeta } };
   }
 
-  // ── Build merged slot meta ──
-  const mergedSlotMeta = { ...previous.slotMeta };
-  const trackSlot = (key: string, val: unknown): void => {
+  // ── Step 2: Apply clearFields (deterministic clears) ──
+  for (const field of clearFields) {
+    if (field === "auctionGradesAllowed") {
+      base.auctionGradesAllowed = [];
+    } else {
+      base[field] = null;
+    }
+    delete base.slotMeta[field];
+  }
+
+  // ── Step 3: Build merged slot meta ──
+  const mergedSlotMeta: Partial<Record<SlotKey, SlotMeta>> = { ...base.slotMeta };
+  const trackSlot = (key: SlotKey, val: unknown): void => {
     if (val !== undefined && val !== null) {
-      mergedSlotMeta[key as keyof ConversationState] = {
+      mergedSlotMeta[key] = {
         source, confidence: sourceConfidence(source), turnIndex: nextTurn,
       };
     }
@@ -523,41 +589,53 @@ function mergeConversationState(
   trackSlot("isForResale", current.isForResale);
   trackSlot("isLegalEntity", current.isLegalEntity);
 
-  // ── Assemble merged state ──
+  // Merge arrays by union (deduplicated)
+  const mergeArrays = (prev: string[], cur: string[] | undefined): string[] => {
+    if (!cur || cur.length === 0) return prev;
+    const set = new Set([...prev, ...cur]);
+    return [...set];
+  };
+
+  // For model/make: never erase if current omitted them
+  const model = current.model ?? base.model;
+  const make = current.make ?? base.make;
+
+  // ── Step 4: Assemble merged state ──
   const merged: ConversationState = {
-    stage: previous.stage, // will be recomputed below
+    stage: base.stage, // will be recomputed
     activeIntent: effectiveIntent,
     model,
     make,
-    generation: isModelSwitch ? (current.generation ?? null) : pick(previous.generation, current.generation),
-    body: isModelSwitch ? (current.body ?? null) : pick(previous.body, current.body),
-    year: isModelSwitch ? (current.year ?? null) : pick(previous.year, current.year),
-    yearText: isModelSwitch ? (current.yearText ?? null) : pick(previous.yearText, current.yearText),
-    ageWindow: isModelSwitch ? (current.ageWindow ?? null) : pick(previous.ageWindow, current.ageWindow),
-    nonPassableType: isModelSwitch ? (current.nonPassableType ?? null) : pick(previous.nonPassableType, current.nonPassableType),
-    drivetrain: pick(previous.drivetrain, current.drivetrain),
-    steering: pick(previous.steering, current.steering),
-    fuelType: pick(previous.fuelType, current.fuelType),
-    trimLevel: isModelSwitch ? (current.trimLevel ?? null) : pick(previous.trimLevel, current.trimLevel),
-    color: pick(previous.color, current.color),
-    mileageText: isModelSwitch ? (current.mileageText ?? null) : pick(previous.mileageText, current.mileageText),
-    auctionGradeMin: isModelSwitch ? (current.auctionGradeMin ?? null) : pick(previous.auctionGradeMin, current.auctionGradeMin),
-    auctionGradesAllowed: isModelSwitch ? (current.auctionGradesAllowed ?? []) : mergeArrays(previous.auctionGradesAllowed, current.auctionGradesAllowed),
-    budgetText: isModelSwitch ? (current.budgetText ?? null) : pick(previous.budgetText, current.budgetText),
-    auctionPriceJPY: isModelSwitch ? (current.auctionPriceJPY ?? null) : pick(previous.auctionPriceJPY, current.auctionPriceJPY),
-    volumeCm3: isModelSwitch ? (current.volumeCm3 ?? null) : pick(previous.volumeCm3, current.volumeCm3),
-    isForResale: pick(previous.isForResale, current.isForResale),
-    isLegalEntity: pick(previous.isLegalEntity, current.isLegalEntity),
-    priority: pick(previous.priority, current.priority),
+    generation: pick(base.generation, current.generation),
+    body: pick(base.body, current.body),
+    year: pick(base.year, current.year),
+    yearText: pick(base.yearText, current.yearText),
+    ageWindow: pick(base.ageWindow, current.ageWindow),
+    nonPassableType: pick(base.nonPassableType, current.nonPassableType),
+    drivetrain: pick(base.drivetrain, current.drivetrain),
+    steering: pick(base.steering, current.steering),
+    fuelType: pick(base.fuelType, current.fuelType),
+    trimLevel: pick(base.trimLevel, current.trimLevel),
+    color: pick(base.color, current.color),
+    mileageText: pick(base.mileageText, current.mileageText),
+    auctionGradeMin: pick(base.auctionGradeMin, current.auctionGradeMin),
+    auctionGradesAllowed: mergeArrays(base.auctionGradesAllowed, current.auctionGradesAllowed),
+    budgetText: pick(base.budgetText, current.budgetText),
+    auctionPriceJPY: pick(base.auctionPriceJPY, current.auctionPriceJPY),
+    volumeCm3: pick(base.volumeCm3, current.volumeCm3),
+    isForResale: pick(base.isForResale, current.isForResale),
+    isLegalEntity: pick(base.isLegalEntity, current.isLegalEntity),
+    priority: pick(base.priority, current.priority),
     pendingQuestion: null, // will be recomputed
-    needsClarification: isModelSwitch ? (current.needsClarification ?? []) : mergedClarification,
-    lastResolvedModelAlias: current.lastResolvedModelAlias ?? previous.lastResolvedModelAlias,
+    needsClarification: [], // will be recomputed
+    lastResolvedModelAlias: current.lastResolvedModelAlias ?? base.lastResolvedModelAlias,
     turnIndex: nextTurn,
-    slotMeta: isModelSwitch ? preserveNonDependentMeta(previous.slotMeta) : mergedSlotMeta,
+    slotMeta: mergedSlotMeta,
   };
 
-  // ── Post-merge: derive implicit values, compute stage, build pending question ──
+  // ── Step 5–7: Post-merge pipeline ──
   deriveImpliedState(merged);
+  merged.needsClarification = computeNeedsClarification(merged);
   merged.stage = computeNextStage(merged);
   merged.pendingQuestion = buildPendingQuestion(merged);
 
@@ -760,10 +838,28 @@ const COLOR_PATTERNS: Array<{ pattern: RegExp; color: string }> = [
 function extractStateUpdate(
   userMessage: string,
   previousState: ConversationState,
-): Partial<ConversationState> {
+): StateUpdate {
   const msg = userMessage.toLowerCase().replace(/ё/g, "е");
   const update: Partial<ConversationState> = {};
-  const clarifications: string[] = [];
+  const clearFields: ClearableField[] = [];
+
+  // ── Deterministic clear rules ──
+  if (/(?:цвет\s+не\s*важ|любой\s+цвет|без\s+разницы\s+по\s+цвету)/i.test(msg)) {
+    clearFields.push("color");
+  }
+  if (/(?:комплектация\s+не\s*важн|любая\s+комплектация)/i.test(msg)) {
+    clearFields.push("trimLevel");
+  }
+  if (/(?:без\s+разницы\s+по\s+приводу)/i.test(msg)) {
+    clearFields.push("drivetrain");
+  }
+  if (/(?:не\s+важно\s+гибрид|без\s+разницы\s+гибрид)/i.test(msg)) {
+    clearFields.push("fuelType");
+  }
+  if (/(?:без\s+разницы\s+по\s+оценке|без\s+оценки)/i.test(msg)) {
+    clearFields.push("auctionGradeMin");
+    clearFields.push("auctionGradesAllowed");
+  }
 
   // ── A) Model / slang resolution ──
   let matchedAlias: string | null = null;
@@ -809,7 +905,7 @@ function extractStateUpdate(
     } else if (/стар/i.test(msg)) {
       update.nonPassableType = "over_5_years";
     } else if (!previousState.nonPassableType) {
-      clarifications.push("nonPassableType");
+      // nonPassableType will be detected by computeNeedsClarification
     }
   } else if (/проходн/i.test(msg)) {
     update.ageWindow = "passable";
@@ -987,11 +1083,7 @@ function extractStateUpdate(
     }
   }
 
-  if (clarifications.length > 0) {
-    update.needsClarification = clarifications;
-  }
-
-  return update;
+  return { set: update, clearFields };
 }
 
 // ── LLM fallback parser (secondary enrichment only) ──────
@@ -1016,8 +1108,7 @@ Return ONLY valid JSON matching this schema — no markdown, no code fences, no 
   "auctionGradesAllowed": string[],
   "mileageText": string | null,
   "budgetText": string | null,
-  "priority": "cheapest" | "best_condition" | "balanced" | null,
-  "needsClarification": string[]
+  "priority": "cheapest" | "best_condition" | "balanced" | null
 }
 
 CRITICAL SLANG RULES:
@@ -1042,7 +1133,7 @@ AGE RULES:
 - "непроходной" / "непроходная" / "не проходной" → ageWindow="non_passable"
 - If non_passable and context says "свежий" or implies new → nonPassableType="under_3_years"
 - If non_passable and context says "старый" or implies old → nonPassableType="over_5_years"
-- If ambiguous which non_passable → nonPassableType=null, add "nonPassableType" to needsClarification
+- If ambiguous which non_passable → nonPassableType=null
 
 FILTER RULES:
 - "передний привод" / "передний" → drivetrain="fwd"
@@ -1063,9 +1154,9 @@ Return ONLY the JSON object. No other text.`;
 async function extractStateUpdateWithLLM(
   userMessage: string,
   previousState: ConversationState,
-): Promise<Partial<ConversationState>> {
+): Promise<StateUpdate> {
   const apiKey = process.env.OPENROUTER_KEY;
-  if (!apiKey) return {};
+  if (!apiKey) return { set: {}, clearFields: [] };
 
   try {
     const contextHint = previousState.model
@@ -1093,13 +1184,13 @@ async function extractStateUpdateWithLLM(
 
     if (!response.ok) {
       console.error(`⚠️ LLM parser call failed: ${response.status} ${response.statusText}`);
-      return {};
+      return { set: {}, clearFields: [] };
     }
 
     const data: OpenRouterResponse = await response.json();
     const raw = data?.choices?.[0]?.message?.content;
     if (typeof raw !== "string" || raw.trim().length === 0) {
-      return {};
+      return { set: {}, clearFields: [] };
     }
 
     // Strip possible markdown code fences despite instructions
@@ -1131,14 +1222,12 @@ async function extractStateUpdateWithLLM(
     if (parsed.mileageText) result.mileageText = parsed.mileageText;
     if (parsed.budgetText) result.budgetText = parsed.budgetText;
     if (parsed.priority) result.priority = parsed.priority;
-    if (Array.isArray(parsed.needsClarification) && parsed.needsClarification.length > 0) {
-      result.needsClarification = parsed.needsClarification;
-    }
+    // needsClarification is NOT extracted — always computed from state via computeNeedsClarification
 
-    return result;
+    return { set: result, clearFields: [] };
   } catch (err) {
     console.error("⚠️ LLM parser error:", err);
-    return {};
+    return { set: {}, clearFields: [] };
   }
 }
 
@@ -1483,30 +1572,34 @@ PARSED INTENT (структурированный разбор)
 
   // Step 2: decide if LLM fallback is needed
   // Use LLM only when deterministic parser found nothing meaningful AND message is not a simple follow-up
+  const detSet = deterministicUpdate.set;
   const hasSubstantiveUpdate = !!(
-    deterministicUpdate.model || deterministicUpdate.make ||
-    deterministicUpdate.drivetrain || deterministicUpdate.ageWindow ||
-    deterministicUpdate.fuelType || deterministicUpdate.trimLevel ||
-    deterministicUpdate.year || deterministicUpdate.color ||
-    deterministicUpdate.activeIntent || deterministicUpdate.auctionGradeMin ||
-    (deterministicUpdate.auctionGradesAllowed && deterministicUpdate.auctionGradesAllowed.length > 0) ||
-    deterministicUpdate.budgetText || deterministicUpdate.priority ||
-    deterministicUpdate.volumeCm3 || deterministicUpdate.auctionPriceJPY
+    detSet.model || detSet.make ||
+    detSet.drivetrain || detSet.ageWindow ||
+    detSet.fuelType || detSet.trimLevel ||
+    detSet.year || detSet.color ||
+    detSet.activeIntent || detSet.auctionGradeMin ||
+    (detSet.auctionGradesAllowed && detSet.auctionGradesAllowed.length > 0) ||
+    detSet.budgetText || detSet.priority ||
+    detSet.volumeCm3 || detSet.auctionPriceJPY
   );
 
-  let combinedUpdate: Partial<ConversationState> = deterministicUpdate;
+  let combinedUpdate: StateUpdate = deterministicUpdate;
   let mergeSource: "regex" | "llm" = "regex";
 
-  if (!hasSubstantiveUpdate && !isFollowUpFilter(userMessage)) {
+  if (!hasSubstantiveUpdate && deterministicUpdate.clearFields.length === 0 && !isFollowUpFilter(userMessage)) {
     // Deterministic parser found nothing — try LLM as backup
     const llmUpdate = await extractStateUpdateWithLLM(userMessage, mem.state);
     // Deterministic parser always takes precedence; LLM fills remaining gaps
-    combinedUpdate = { ...llmUpdate, ...deterministicUpdate };
+    combinedUpdate = {
+      set: { ...llmUpdate.set, ...deterministicUpdate.set },
+      clearFields: [...deterministicUpdate.clearFields, ...llmUpdate.clearFields],
+    };
     mergeSource = "llm";
   }
 
-  // Step 3: merge with persistent state (includes derive, stage transition, pending question)
-  const mergedState = mergeConversationState(mem.state, combinedUpdate, mergeSource);
+  // Step 3: apply update to persistent state (includes derive, stage transition, pending question)
+  const mergedState = applyStateUpdate(mem.state, combinedUpdate, mergeSource);
   mem.state = mergedState;
 
   const recentMessages = mem.messages.filter(
