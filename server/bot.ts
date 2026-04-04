@@ -1422,8 +1422,9 @@ function extractStateUpdate(
 
   // Fallback volume: with unit but no prefix keyword (e.g., "1.5 литра", "1500 куб")
   if (!update.volumeCm3) {
-    const volumeFallback = msg.match(/\b([\d]+[.,][\d]+)\s*(?:л(?:итр[аов]?)?)\b/i)
-      ?? msg.match(/\b(\d{3,5})\s*(?:куб(?:\.\s*см)?|см3|cc)\b/i);
+    // Note: trailing \b removed — JS \b doesn't match Cyrillic word boundaries
+    const volumeFallback = msg.match(/\b([\d]+[.,][\d]+)\s*(?:л(?:итр[аов]?)?)(?:\s|$|[.,])/i)
+      ?? msg.match(/\b(\d{3,5})\s*(?:куб(?:\.\s*см)?|см3|cc)(?:\s|$|[.,])/i);
     if (volumeFallback) {
       const volStr = volumeFallback[1].replace(",", ".");
       const volNum = parseFloat(volStr);
