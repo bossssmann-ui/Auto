@@ -555,6 +555,20 @@ function violatesKnownModelGuard(reply: string, state: ConversationState): boole
     "какую модель",
     "какой тип техники",
     "что вас интересует",
+    "какую машину",
+    "какой автомобиль вы",
+    "какой кроссовер",
+    "какой внедорожник",
+    "какой транспорт",
+    "что именно вас интересует",
+    "что именно вы ищете",
+    "какой вид техники",
+    "расскажите, что вас",
+    "что вы хотите найти",
+    "какое авто",
+    "какой авто",
+    "легковой, мотоцикл",
+    "легковой автомобиль, мотоцикл",
   ];
   return forbidden.some(phrase => lower.includes(phrase));
 }
@@ -642,12 +656,12 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
   else if (state.drivetrain === "rwd") knownParts.push("задний привод");
   else if (state.drivetrain === "4wd") knownParts.push("полный привод");
 
-  if (state.trimLevel === "base") knownParts.push("база");
+  if (state.trimLevel === "base") knownParts.push("самая простая комплектация");
   else if (state.trimLevel === "mid") knownParts.push("средняя комплектация");
-  else if (state.trimLevel === "top") knownParts.push("максималка");
+  else if (state.trimLevel === "top") knownParts.push("топовая комплектация");
 
   if (state.auctionGradesAllowed.length > 0) {
-    knownParts.push(`${state.auctionGradesAllowed.join(", ")} допускается`);
+    knownParts.push(`оценка ${state.auctionGradesAllowed.join(", ")} допустима`);
   }
   if (state.auctionGradeMin) knownParts.push(`оценка от ${state.auctionGradeMin}`);
 
@@ -661,7 +675,8 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
   if (state.volumeCm3) knownParts.push(`объём: ${state.volumeCm3} см³`);
   if (state.isForResale != null) knownParts.push(state.isForResale ? "для перепродажи" : "для себя");
   if (state.isLegalEntity != null) knownParts.push(state.isLegalEntity ? "юрлицо" : "физлицо");
-  if (state.priority === "cheapest") knownParts.push("подешевле");
+  // Only show priority if it adds info beyond trimLevel
+  if (state.priority === "cheapest" && state.trimLevel !== "base") knownParts.push("подешевле");
   else if (state.priority === "best_condition") knownParts.push("лучшее состояние");
 
   // ── Build confirmation line ──
@@ -682,19 +697,19 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
 
   if (state.activeIntent === "price_calc") {
     if (state.ageWindow === "non_passable" && !state.nonPassableType) {
-      missingQuestions.push("это свежий до 3 лет или старше 5 лет");
+      missingQuestions.push("нужен вариант до 3 лет или старше 5 лет");
     }
     if (!state.year && !state.ageWindow) {
-      missingQuestions.push("какой год или возрастное окно");
+      missingQuestions.push("какой год или возрастная категория");
     }
     if (!state.auctionPriceJPY && !state.budgetText) {
-      missingQuestions.push("какая цена на аукционе в йенах или бюджет");
+      missingQuestions.push("какой бюджет или цена покупки в йенах");
     }
     if (!state.volumeCm3) {
       missingQuestions.push("какой объём двигателя");
     }
     if (state.isForResale == null && state.isLegalEntity == null) {
-      missingQuestions.push("оформление на физлицо / юрлицо / перепродажу");
+      missingQuestions.push("оформление на физлицо, юрлицо или под перепродажу");
     } else {
       if (state.isForResale == null) missingQuestions.push("для перепродажи или для себя");
       if (state.isLegalEntity == null) missingQuestions.push("физлицо или юрлицо");
@@ -712,7 +727,7 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
   }
 
   if (missingQuestions.length > 0) {
-    parts.push(`Уточни только: ${missingQuestions.join(", ")}.`);
+    parts.push(`Уточни, пожалуйста: ${missingQuestions.join(", ")}.`);
   } else if (state.stage === "ready_to_calculate") {
     parts.push("Все данные есть, сейчас посчитаю.");
   }
@@ -1317,7 +1332,7 @@ function extractStateUpdate(
   }
 
   // Priority
-  if (/(?:подешевле|главное\s+дешевле|попроще.*цен|бюджетн)/i.test(msg)) {
+  if (/(?:подешевле|главное\s+дешевле|попроще.*цен|бюджетн|самый\s+простой)/i.test(msg)) {
     update.priority = "cheapest";
   } else if (/(?:главное\s+живой|получше\s+состояни|хорош(?:ее|ий)\s+состояни)/i.test(msg)) {
     update.priority = "best_condition";
@@ -2053,6 +2068,39 @@ PARSED INTENT (структурированный разбор)
   // Step 3: apply update to persistent state (includes derive, stage transition, pending question)
   const mergedState = applyStateUpdate(mem.state, combinedUpdate, mergeSource);
   mem.state = mergedState;
+
+  // ── Fast-path: deterministic response when parser extracted enough data ──
+  // When model is known AND ≥2 filter/preference slots are filled, and we're
+  // still collecting data, use the deterministic response builder directly.
+  // This prevents the LLM from ignoring parsed state and asking generic questions
+  // (the root cause of the "bot is still тупой" production bug).
+  if (
+    mergedState.model != null &&
+    (mergedState.stage === "collecting_calc_params" || mergedState.stage === "collecting_filters")
+  ) {
+    const filledCount = [
+      mergedState.ageWindow != null,
+      mergedState.drivetrain != null,
+      mergedState.fuelType != null,
+      mergedState.trimLevel != null,
+      mergedState.year != null,
+      mergedState.budgetText != null,
+      mergedState.priority != null,
+      mergedState.auctionGradeMin != null,
+      mergedState.color != null,
+      mergedState.volumeCm3 != null,
+      mergedState.auctionPriceJPY != null,
+      mergedState.isForResale != null,
+      mergedState.isLegalEntity != null,
+      mergedState.auctionGradesAllowed.length > 0,
+    ].filter(Boolean).length;
+
+    if (filledCount >= 2) {
+      console.log(`🔀 Fast-path: deterministic response (${mergedState.make} ${mergedState.model}, ${filledCount} filters)`);
+      const plan = planReply(mergedState, userMessage);
+      return buildSafeFallbackReply(mergedState, plan);
+    }
+  }
 
   const recentMessages = mem.messages.filter(
     (m): m is { role: "user" | "assistant"; content: string } =>
