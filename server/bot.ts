@@ -147,6 +147,7 @@ interface ConversationEntry {
   summary: string;
   messages: ChatMessage[];
   lastActivity: number;
+  parsedIntent: ParsedCarIntent;
 }
 
 const conversations = new Map<number, ConversationEntry>();
@@ -166,11 +167,101 @@ setInterval(() => {
 function getMemory(userId: number): ConversationEntry {
   let entry = conversations.get(userId);
   if (!entry) {
-    entry = { summary: "", messages: [], lastActivity: Date.now() };
+    entry = { summary: "", messages: [], lastActivity: Date.now(), parsedIntent: { ...DEFAULT_PARSED_INTENT, auctionGradesAllowed: [], needsClarification: [], notes: [] } };
     conversations.set(userId, entry);
   }
   entry.lastActivity = Date.now();
   return entry;
+}
+
+/** Detect short follow-up messages that refine the current car, not a fresh search */
+function isFollowUpFilter(message: string): boolean {
+  const trimmed = message.trim();
+  // Short messages (under ~60 chars) that don't name a new car model are likely follow-ups
+  if (trimmed.length > 80) return false;
+  const followUpPatterns = [
+    /^(любой|любая|любое)\b/i,
+    /^(максималка|максимальная|жирная|база|попроще|средняя)/i,
+    /^(тогда|а |ну |ок|ладно|давай|хорошо)/i,
+    /^(вд|полный|передний|задний)/i,
+    /^(светл|тёмн|темн|бел|черн|серебр|серый)/i,
+    /^(проходн|непроходн|не проходн|свеж|стар)/i,
+    /^(гибрид|бензин|дизель|электр)/i,
+    /^R\b/i,
+    /^(оценк|оценка)\b/i,
+    /^(можно|допустим|подойд|пойд|годит)/i,
+    /^(да|нет|угу|ага|не надо|не нужн)/i,
+    /^(бюджет|до \d|в пределах)/i,
+    /^(посчитай|рассчитай|считай|можешь посчитать)/i,
+    /^(а проходн|а что по|а если|а можно)/i,
+  ];
+  return followUpPatterns.some((p) => p.test(trimmed));
+}
+
+/** Merge current parsed intent with previous, preserving already-known fields */
+function mergeParsedIntent(
+  previous: ParsedCarIntent,
+  current: ParsedCarIntent,
+): ParsedCarIntent {
+  // If current looks like "other" but previous has a known model and current
+  // message is likely a follow-up filter, preserve the previous car-related intent
+  const effectiveIntent =
+    current.intent === "other" && previous.model != null
+      ? previous.intent
+      : current.intent !== "other"
+        ? current.intent
+        : previous.intent;
+
+  // Helper: pick current value if it's non-null, otherwise keep previous
+  const pick = <T>(prev: T | null, cur: T | null): T | null => cur ?? prev;
+
+  // For model/make: never erase if current omitted them
+  const model = current.model ?? previous.model;
+  const make = current.make ?? previous.make;
+
+  // Merge arrays by union (deduplicated)
+  const mergeArrays = (prev: string[], cur: string[]): string[] => {
+    const set = new Set([...prev, ...cur]);
+    return [...set];
+  };
+
+  // For needsClarification: remove items that are now resolved
+  const mergedClarification = previous.needsClarification.filter((item) => {
+    // If current provided a value for this field, remove from clarification
+    const fieldMap: Record<string, unknown> = {
+      nonPassableType: current.nonPassableType,
+      drivetrain: current.drivetrain,
+      fuelType: current.fuelType,
+      trimLevel: current.trimLevel,
+      budgetText: current.budgetText,
+      ageWindow: current.ageWindow,
+    };
+    return !(item in fieldMap && fieldMap[item] != null);
+  });
+  // Add new clarifications from current
+  for (const item of current.needsClarification) {
+    if (!mergedClarification.includes(item)) {
+      mergedClarification.push(item);
+    }
+  }
+
+  return {
+    intent: effectiveIntent,
+    model,
+    make,
+    generation: pick(previous.generation, current.generation),
+    body: pick(previous.body, current.body),
+    ageWindow: pick(previous.ageWindow, current.ageWindow),
+    nonPassableType: pick(previous.nonPassableType, current.nonPassableType),
+    drivetrain: pick(previous.drivetrain, current.drivetrain),
+    fuelType: pick(previous.fuelType, current.fuelType),
+    trimLevel: pick(previous.trimLevel, current.trimLevel),
+    auctionGradesAllowed: mergeArrays(previous.auctionGradesAllowed, current.auctionGradesAllowed),
+    budgetText: pick(previous.budgetText, current.budgetText),
+    priority: pick(previous.priority, current.priority),
+    needsClarification: mergedClarification,
+    notes: mergeArrays(previous.notes, current.notes),
+  };
 }
 
 function appendMessage(
@@ -718,12 +809,30 @@ PARSED INTENT (структурированный разбор)
 • НЕ переинтерпретируй модель в абстрактный класс техники.
 • Задавай вопросы ТОЛЬКО по полям, перечисленным в needsClarification, или по критически недостающим данным (бюджет, точный диапазон лет).
 • Если intent="price_calc" но данных для calculate_vehicle_price недостаточно — подтверди фильтры и спроси только недостающее (аукционная цена в йенах, объём двигателя, точный возраст).
+
+════════════════════════════════════════════
+ЖЁСТКИЙ ЗАПРЕТ: ЕСЛИ МОДЕЛЬ ИЗВЕСТНА
+════════════════════════════════════════════
+
+Если в Parsed user intent уже заполнено поле "model", ты ОБЯЗАН:
+• Работать с этой моделью.
+• НЕ спрашивать: «какой бренд?», «какую модель?», «какой тип техники?», «что вас интересует?».
+• Короткие уточняющие сообщения клиента (цвет, привод, комплектация) — это дополнения к текущей модели, а НЕ новый запрос.
 `.trim();
 
   // ── Parser-first: extract structured intent before replying ──
-  const parsedIntent = await parseUserIntent(userMessage);
-
   const mem = getMemory(chatId);
+  const currentParsed = await parseUserIntent(userMessage);
+
+  // If it's a short follow-up and current parse lost the model, treat as update
+  const isFollowUp = isFollowUpFilter(userMessage) && mem.parsedIntent.model != null;
+  const adjustedCurrent = isFollowUp && currentParsed.intent === "other"
+    ? { ...currentParsed, intent: mem.parsedIntent.intent as ParsedCarIntent["intent"] }
+    : currentParsed;
+
+  // Merge with persistent intent state
+  const effectiveIntent = mergeParsedIntent(mem.parsedIntent, adjustedCurrent);
+  mem.parsedIntent = effectiveIntent;
 
   const recentMessages = mem.messages.filter(
     (m): m is { role: "user" | "assistant"; content: string } =>
@@ -732,10 +841,20 @@ PARSED INTENT (структурированный разбор)
   );
 
   // Build parsed intent context message (only when intent is car-related)
-  const parsedIntentMessages: Array<{ role: "system"; content: string }> =
-    parsedIntent.intent !== "other"
-      ? [{ role: "system" as const, content: `Parsed user intent (trust these extracted filters, do NOT re-interpret the model or ask questions about fields that are already filled): ${JSON.stringify(parsedIntent)}` }]
-      : [];
+  const parsedIntentMessages: Array<{ role: "system"; content: string }> = [];
+  if (effectiveIntent.intent !== "other" || effectiveIntent.model != null) {
+    parsedIntentMessages.push({
+      role: "system" as const,
+      content: `Parsed user intent (MERGED from conversation history — trust these extracted filters, do NOT re-interpret the model or ask questions about fields that are already filled): ${JSON.stringify(effectiveIntent)}`,
+    });
+    // Hard reply guard: if model is known, inject a strong constraint
+    if (effectiveIntent.model) {
+      parsedIntentMessages.push({
+        role: "system" as const,
+        content: `HARD CONSTRAINT: The client's car model is already resolved as "${effectiveIntent.model}" (${effectiveIntent.make ?? ""}). Do NOT ask: "какой бренд?", "какую марку?", "какую модель?", "какой тип техники?", "что вас интересует?". These questions are FORBIDDEN. Treat any new filters as updates to this model.`,
+      });
+    }
+  }
 
   const body = {
     model: MODEL,
