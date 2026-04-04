@@ -2,6 +2,23 @@ import { Telegraf } from "telegraf";
 import "dotenv/config";
 import { calculateTurnkeyPrice, type CalcParams } from "./calculator";
 
+// ── Cyrillic-aware word boundary fix ─────────────────────
+// JavaScript \b only matches ASCII [a-zA-Z0-9_] boundaries and silently fails
+// on Cyrillic characters. This helper replaces \b with lookaround assertions
+// that include Cyrillic letters, enabling correct word boundary detection
+// for Russian text patterns.
+function cyrb(re: RegExp): RegExp {
+  let isFirst = true;
+  const fixed = re.source.replace(/\\b/g, () => {
+    if (isFirst) {
+      isFirst = false;
+      return '(?<![а-яёА-ЯЁa-zA-Z0-9])';
+    }
+    return '(?![а-яёА-ЯЁa-zA-Z0-9])';
+  });
+  return new RegExp(fixed, re.flags);
+}
+
 // ── Environment validation ───────────────────────────────
 const token = process.env.AI_BOT_TOKEN;
 if (!token) {
@@ -740,7 +757,7 @@ function isFollowUpFilter(message: string): boolean {
   // Short messages (under ~80 chars) that don't name a new car model are likely follow-ups
   if (trimmed.length > 80) return false;
   const followUpPatterns = [
-    /^(любой|любая|любое)\b/i,
+    /^(любой|любая|любое)(?![а-яёА-ЯЁa-zA-Z0-9])/i,
     /^(максималка|максимальная|жирная|база|попроще|средняя)/i,
     /^(тогда|а |ну |ок|ладно|давай|хорошо)/i,
     /^(вд|полный|передний|задний)/i,
@@ -748,7 +765,7 @@ function isFollowUpFilter(message: string): boolean {
     /^(проходн|непроходн|не проходн|свеж|стар)/i,
     /^(гибрид|бензин|дизель|электр)/i,
     /^R\b/i,
-    /^(оценк|оценка)\b/i,
+    /^(оценк|оценка)(?![а-яёА-ЯЁa-zA-Z0-9])/i,
     /^(можно|допустим|подойд|пойд|годит)/i,
     /^(да|нет|угу|ага|не надо|не нужн)/i,
     /^(бюджет|до \d|в пределах)/i,
@@ -1080,59 +1097,59 @@ const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 /** Slang-to-model dictionary. Keys are lowercase, NFD-normalized. */
 const MODEL_SLANG: Array<{ patterns: RegExp; make: string; model: string | null }> = [
   // Honda
-  { patterns: /\b(?:везел[аеёо]?|визел[аеёо]?|везёл[аеёо]?)\b/i, make: "Honda", model: "Vezel" },
-  { patterns: /\b(?:фит|фита)\b/i, make: "Honda", model: "Fit" },
-  { patterns: /\b(?:цээрвух[аи]?|cr-?v)\b/i, make: "Honda", model: "CR-V" },
-  { patterns: /\b(?:ашэрвух[аи]?|hr-?v)\b/i, make: "Honda", model: "HR-V" },
-  { patterns: /\b(?:шаттл|фит\s*шаттл)\b/i, make: "Honda", model: "Fit Shuttle" },
+  { patterns: cyrb(/\b(?:везел[аеёо]?|визел[аеёо]?|везёл[аеёо]?)\b/i), make: "Honda", model: "Vezel" },
+  { patterns: cyrb(/\b(?:фит|фита)\b/i), make: "Honda", model: "Fit" },
+  { patterns: cyrb(/\b(?:цээрвух[аи]?|cr-?v)\b/i), make: "Honda", model: "CR-V" },
+  { patterns: cyrb(/\b(?:ашэрвух[аи]?|hr-?v)\b/i), make: "Honda", model: "HR-V" },
+  { patterns: cyrb(/\b(?:шаттл|фит\s*шаттл)\b/i), make: "Honda", model: "Fit Shuttle" },
   // Toyota
-  { patterns: /\b(?:харе[кг]|харьк[аи]?)\b/i, make: "Toyota", model: "Harrier" },
-  { patterns: /\b(?:филдер[аи]?)\b/i, make: "Toyota", model: "Corolla Fielder" },
-  { patterns: /\b(?:приус[аеёо]?|prius)\b/i, make: "Toyota", model: "Prius" },
-  { patterns: /\b(?:прадик[аи]?|prado)\b/i, make: "Toyota", model: "Land Cruiser Prado" },
-  { patterns: /\b(?:вокси|вокс)\b/i, make: "Toyota", model: "Voxy" },
-  { patterns: /\b(?:ноах|ной)\b/i, make: "Toyota", model: "Noah" },
-  { patterns: /\b(?:рав(?:чик)?|рав\s*4|rav\s*4)\b/i, make: "Toyota", model: "RAV4" },
-  { patterns: /\b(?:камр(?:и|юх[аи]?))\b/i, make: "Toyota", model: "Camry" },
-  { patterns: /\b(?:краун)\b/i, make: "Toyota", model: "Crown" },
-  { patterns: /\b(?:крузак[аи]?)\b/i, make: "Toyota", model: "Land Cruiser" },
-  { patterns: /\b(?:сиента)\b/i, make: "Toyota", model: "Sienta" },
-  { patterns: /\b(?:пассо)\b/i, make: "Toyota", model: "Passo" },
-  { patterns: /\b(?:танк)\b/i, make: "Toyota", model: "Tank" },
-  { patterns: /\b(?:руми)\b/i, make: "Toyota", model: "Roomy" },
-  { patterns: /\b(?:виш)\b/i, make: "Toyota", model: "Wish" },
-  { patterns: /\b(?:суксид)\b/i, make: "Toyota", model: "Succeed" },
-  { patterns: /\b(?:пробокс)\b/i, make: "Toyota", model: "Probox" },
-  { patterns: /\b(?:рактис)\b/i, make: "Toyota", model: "Ractis" },
-  { patterns: /\b(?:марк)\b/i, make: "Toyota", model: "Mark II" },
-  { patterns: /\b(?:чайзер|чайник)\b/i, make: "Toyota", model: "Chaser" },
+  { patterns: cyrb(/\b(?:харе[кг]|харьк[аи]?)\b/i), make: "Toyota", model: "Harrier" },
+  { patterns: cyrb(/\b(?:филдер[аи]?)\b/i), make: "Toyota", model: "Corolla Fielder" },
+  { patterns: cyrb(/\b(?:приус[аеёо]?|prius)\b/i), make: "Toyota", model: "Prius" },
+  { patterns: cyrb(/\b(?:прадик[аи]?|prado)\b/i), make: "Toyota", model: "Land Cruiser Prado" },
+  { patterns: cyrb(/\b(?:вокси|вокс)\b/i), make: "Toyota", model: "Voxy" },
+  { patterns: cyrb(/\b(?:ноах|ной)\b/i), make: "Toyota", model: "Noah" },
+  { patterns: cyrb(/\b(?:рав(?:чик)?|рав\s*4|rav\s*4)\b/i), make: "Toyota", model: "RAV4" },
+  { patterns: cyrb(/\b(?:камр(?:и|юх[аи]?))\b/i), make: "Toyota", model: "Camry" },
+  { patterns: cyrb(/\b(?:краун)\b/i), make: "Toyota", model: "Crown" },
+  { patterns: cyrb(/\b(?:крузак[аи]?)\b/i), make: "Toyota", model: "Land Cruiser" },
+  { patterns: cyrb(/\b(?:сиента)\b/i), make: "Toyota", model: "Sienta" },
+  { patterns: cyrb(/\b(?:пассо)\b/i), make: "Toyota", model: "Passo" },
+  { patterns: cyrb(/\b(?:танк)\b/i), make: "Toyota", model: "Tank" },
+  { patterns: cyrb(/\b(?:руми)\b/i), make: "Toyota", model: "Roomy" },
+  { patterns: cyrb(/\b(?:виш)\b/i), make: "Toyota", model: "Wish" },
+  { patterns: cyrb(/\b(?:суксид)\b/i), make: "Toyota", model: "Succeed" },
+  { patterns: cyrb(/\b(?:пробокс)\b/i), make: "Toyota", model: "Probox" },
+  { patterns: cyrb(/\b(?:рактис)\b/i), make: "Toyota", model: "Ractis" },
+  { patterns: cyrb(/\b(?:марк)\b/i), make: "Toyota", model: "Mark II" },
+  { patterns: cyrb(/\b(?:чайзер|чайник)\b/i), make: "Toyota", model: "Chaser" },
   // Nissan
-  { patterns: /\b(?:серена)\b/i, make: "Nissan", model: "Serena" },
-  { patterns: /\b(?:эльгранд)\b/i, make: "Nissan", model: "Elgrand" },
-  { patterns: /\b(?:виноград)\b/i, make: "Nissan", model: "Wingroad" },
-  { patterns: /\b(?:ad|адэха)\b/i, make: "Nissan", model: "AD" },
+  { patterns: cyrb(/\b(?:серена)\b/i), make: "Nissan", model: "Serena" },
+  { patterns: cyrb(/\b(?:эльгранд)\b/i), make: "Nissan", model: "Elgrand" },
+  { patterns: cyrb(/\b(?:виноград)\b/i), make: "Nissan", model: "Wingroad" },
+  { patterns: cyrb(/\b(?:ad|адэха)\b/i), make: "Nissan", model: "AD" },
   // Subaru
-  { patterns: /\b(?:форик|форестер|форесрер)\b/i, make: "Subaru", model: "Forester" },
+  { patterns: cyrb(/\b(?:форик|форестер|форесрер)\b/i), make: "Subaru", model: "Forester" },
   // Mitsubishi
-  { patterns: /\b(?:паджер(?:о|ик)|пыжик)\b/i, make: "Mitsubishi", model: "Pajero" },
+  { patterns: cyrb(/\b(?:паджер(?:о|ик)|пыжик)\b/i), make: "Mitsubishi", model: "Pajero" },
   // Suzuki
-  { patterns: /\b(?:эскуд(?:о|ик))\b/i, make: "Suzuki", model: "Escudo" },
+  { patterns: cyrb(/\b(?:эскуд(?:о|ик))\b/i), make: "Suzuki", model: "Escudo" },
   // Lexus (make only)
-  { patterns: /\b(?:лось)\b/i, make: "Lexus", model: null },
+  { patterns: cyrb(/\b(?:лось)\b/i), make: "Lexus", model: null },
 ];
 
 /** Explicit make names (full brand match) */
 const MAKE_PATTERNS: Array<{ pattern: RegExp; make: string }> = [
-  { pattern: /\b(?:тойота|toyota)\b/i, make: "Toyota" },
-  { pattern: /\b(?:хонда|honda)\b/i, make: "Honda" },
-  { pattern: /\b(?:ниссан|nissan)\b/i, make: "Nissan" },
-  { pattern: /\b(?:субару|subaru)\b/i, make: "Subaru" },
-  { pattern: /\b(?:мицубиси|мицубиши|mitsubishi)\b/i, make: "Mitsubishi" },
-  { pattern: /\b(?:мазда|mazda)\b/i, make: "Mazda" },
-  { pattern: /\b(?:сузуки|suzuki)\b/i, make: "Suzuki" },
-  { pattern: /\b(?:лексус|lexus)\b/i, make: "Lexus" },
-  { pattern: /\b(?:инфинити|infiniti)\b/i, make: "Infiniti" },
-  { pattern: /\b(?:дайхатсу|daihatsu)\b/i, make: "Daihatsu" },
+  { pattern: cyrb(/\b(?:тойота|toyota)\b/i), make: "Toyota" },
+  { pattern: cyrb(/\b(?:хонда|honda)\b/i), make: "Honda" },
+  { pattern: cyrb(/\b(?:ниссан|nissan)\b/i), make: "Nissan" },
+  { pattern: cyrb(/\b(?:субару|subaru)\b/i), make: "Subaru" },
+  { pattern: cyrb(/\b(?:мицубиси|мицубиши|mitsubishi)\b/i), make: "Mitsubishi" },
+  { pattern: cyrb(/\b(?:мазда|mazda)\b/i), make: "Mazda" },
+  { pattern: cyrb(/\b(?:сузуки|suzuki)\b/i), make: "Suzuki" },
+  { pattern: cyrb(/\b(?:лексус|lexus)\b/i), make: "Lexus" },
+  { pattern: cyrb(/\b(?:инфинити|infiniti)\b/i), make: "Infiniti" },
+  { pattern: cyrb(/\b(?:дайхатсу|daihatsu)\b/i), make: "Daihatsu" },
 ];
 
 /** Explicit model names (when user types full model name) */
@@ -1151,17 +1168,17 @@ const EXPLICIT_MODEL_PATTERNS: Array<{ pattern: RegExp; make: string; model: str
 
 /** Color dictionary */
 const COLOR_PATTERNS: Array<{ pattern: RegExp; color: string }> = [
-  { pattern: /\b(?:любой\s+светл|светл[аыйое])/i, color: "light" },
-  { pattern: /\b(?:бел[аыйое])/i, color: "белый" },
-  { pattern: /\b(?:серебрист[аыйое])/i, color: "серебристый" },
-  { pattern: /\b(?:сер[аыйое])\b/i, color: "серый" },
-  { pattern: /\b(?:черн[аыйое]|чёрн[аыйое])/i, color: "чёрный" },
-  { pattern: /\b(?:синь|син[аыйиое])/i, color: "синий" },
-  { pattern: /\b(?:красн[аыйое])/i, color: "красный" },
-  { pattern: /\b(?:бежев[аыйое])/i, color: "бежевый" },
-  { pattern: /\b(?:любой\s+тёмн|любой\s+темн|тёмн[аыйое]|темн[аыйое])/i, color: "dark" },
-  { pattern: /\b(?:зелён[аыйое]|зелен[аыйое])/i, color: "зелёный" },
-  { pattern: /\b(?:перламутр)/i, color: "перламутр" },
+  { pattern: cyrb(/\b(?:любой\s+светл|светл[аыйое])/i), color: "light" },
+  { pattern: cyrb(/\b(?:бел[аыйое])/i), color: "белый" },
+  { pattern: cyrb(/\b(?:серебрист[аыйое])/i), color: "серебристый" },
+  { pattern: cyrb(/\b(?:сер[аыйое])\b/i), color: "серый" },
+  { pattern: cyrb(/\b(?:черн[аыйое]|чёрн[аыйое])/i), color: "чёрный" },
+  { pattern: cyrb(/\b(?:синь|син[аыйиое])/i), color: "синий" },
+  { pattern: cyrb(/\b(?:красн[аыйое])/i), color: "красный" },
+  { pattern: cyrb(/\b(?:бежев[аыйое])/i), color: "бежевый" },
+  { pattern: cyrb(/\b(?:любой\s+тёмн|любой\s+темн|тёмн[аыйое]|темн[аыйое])/i), color: "dark" },
+  { pattern: cyrb(/\b(?:зелён[аыйое]|зелен[аыйое])/i), color: "зелёный" },
+  { pattern: cyrb(/\b(?:перламутр)/i), color: "перламутр" },
 ];
 
 /**
@@ -1258,7 +1275,7 @@ function extractStateUpdate(
     update.drivetrain = "fwd";
   } else if (/(?:задн(?:ий|яя)?\s*привод|задн(?:ий|яя)?(?:\s|$))/i.test(msg)) {
     update.drivetrain = "rwd";
-  } else if (/(?:полн(?:ый|ая)?\s*привод|\bвд\b|4\s*(?:вд|wd)\b|\bawd\b)/i.test(msg)) {
+  } else if (/(?:полн(?:ый|ая)?\s*привод|(?<![а-яёА-ЯЁa-zA-Z0-9])вд(?![а-яёА-ЯЁa-zA-Z0-9])|4\s*(?:вд|wd)(?![а-яёА-ЯЁa-zA-Z0-9])|\bawd\b)/i.test(msg)) {
     update.drivetrain = "4wd";
   }
 
@@ -1272,25 +1289,25 @@ function extractStateUpdate(
   // Fuel type
   if (/(?:без\s*гибрид)/i.test(msg)) {
     update.fuelType = "gasoline";
-  } else if (/\b(?:гибрид)/i.test(msg)) {
+  } else if (/(?<![а-яёА-ЯЁa-zA-Z0-9])(?:гибрид)/i.test(msg)) {
     update.fuelType = "hybrid";
   }
-  if (/\b(?:бенз(?:ин)?)\b/i.test(msg)) {
+  if (/(?<![а-яёА-ЯЁa-zA-Z0-9])(?:бенз(?:ин)?)(?![а-яёА-ЯЁa-zA-Z0-9])/i.test(msg)) {
     update.fuelType = "gasoline";
   }
-  if (/\b(?:дизель)\b/i.test(msg)) {
+  if (/(?<![а-яёА-ЯЁa-zA-Z0-9])(?:дизель)(?![а-яёА-ЯЁa-zA-Z0-9])/i.test(msg)) {
     update.fuelType = "diesel";
   }
-  if (/\b(?:электр(?:о|ичка)?|ev)\b/i.test(msg)) {
+  if (/(?<![а-яёА-ЯЁa-zA-Z0-9])(?:электр(?:о|ичка)?|ev)(?![а-яёА-ЯЁa-zA-Z0-9])/i.test(msg)) {
     update.fuelType = "ev";
   }
 
   // Trim level
-  if (/(?:самый\s+простой|попроще|\bбаза\b|базов)/i.test(msg)) {
+  if (/(?:самый\s+простой|попроще|(?<![а-яёА-ЯЁa-zA-Z0-9])база(?![а-яёА-ЯЁa-zA-Z0-9])|базов)/i.test(msg)) {
     update.trimLevel = "base";
   } else if (/(?:средн(?:яя|ий|ее)|средн(?:\s|$))/i.test(msg)) {
     update.trimLevel = "mid";
-  } else if (/(?:максималк|максимальн|\bмакс\b|жирн)/i.test(msg)) {
+  } else if (/(?:максималк|максимальн|(?<![а-яёА-ЯЁa-zA-Z0-9])макс(?![а-яёА-ЯЁa-zA-Z0-9])|жирн)/i.test(msg)) {
     update.trimLevel = "top";
   }
 
@@ -1315,7 +1332,7 @@ function extractStateUpdate(
   } else if (/(?:перепродаж|на\s+продажу|для\s+продажи)/i.test(msg)) {
     update.isForResale = true;
   }
-  if (/(?:юрлиц|юр\.\s*лиц|для\s+компании|ооо|ип\b)/i.test(msg)) {
+  if (/(?:юрлиц|юр\.\s*лиц|для\s+компании|(?<![а-яёА-ЯЁa-zA-Z0-9])ооо(?![а-яёА-ЯЁa-zA-Z0-9])|(?<![а-яёА-ЯЁa-zA-Z0-9])ип(?![а-яёА-ЯЁa-zA-Z0-9]))/i.test(msg)) {
     update.isLegalEntity = true;
   } else if (/(?:физлиц|физ\.\s*лиц)/i.test(msg)) {
     update.isLegalEntity = false;
