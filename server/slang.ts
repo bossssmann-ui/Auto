@@ -116,10 +116,10 @@ const bodyAliases: Array<{ pattern: RegExp; value: string }> = [
   { pattern: cyrb(/\b(?:хэтчбек|хетчбек|хэтч|хетч)\b/i), value: "hatchback" },
 ];
 
-/** Condition aliases */
+/** Condition aliases — negative lookbehind to avoid "не дрова" matching as poor */
 const conditionAliases: Array<{ pattern: RegExp; value: "poor" | "decent" }> = [
-  { pattern: cyrb(/\b(?:корч|корча|корыто|ведро(?:\s+с\s+гайками)?|дрова|ушатанн|ушат|убит(?:ая|ый)?|уставш|хламиди|трахом)\b/i), value: "poor" },
-  { pattern: cyrb(/\b(?:живая|живой(?:\s+вариант)?)\b/i), value: "decent" },
+  { pattern: /(?<!не\s)(?<![а-яёА-ЯЁa-zA-Z0-9])(?:корч[а-яё]*|корыт[а-яё]*|ведр[а-яё]*(?:\s+с\s+гайками)?|дров[а-яё]*|ушатанн[а-яё]*|ушат(?![а-яА-Я])|убит[а-яё]*|уставш[а-яё]*|хламиди[а-яё]*|трахом[а-яё]*)(?![а-яёА-ЯЁa-zA-Z0-9])/i, value: "poor" },
+  { pattern: /(?<![а-яёА-ЯЁa-zA-Z0-9])(?:живая|живой(?:\s+вариант)?)(?![а-яёА-ЯЁa-zA-Z0-9])/i, value: "decent" },
 ];
 
 /** Steering aliases */
@@ -183,7 +183,7 @@ const sellerClaimPatterns: Array<{ pattern: RegExp; meaning: string }> = [
 const noRussiaMileagePattern: RegExp = cyrb(/\b(?:беспробежн(?:ая|ый|ое)?|беспробежк[а-яё]*|б\/п)\b/i);
 
 /** Budget guidance phrases */
-const budgetGuidancePattern: RegExp = /(?:засвети\s+стоимост|дай\s+вилку|сориентируй\s+по\s+бюджет|примерн(?:ый|ая|ое)?\s+бюджет|цен[а-яё]*\s+в\s+иенах\s+не\s+знаю)/i;
+const budgetGuidancePattern: RegExp = /(?:засвети\s+(?:стоимост|бюджет|цен)|дай\s+вилку|сориентируй\s+по\s+бюджет|примерн(?:ый|ая|ое)?\s+бюджет|цен[а-яё]*\s+в\s+иенах\s+не\s+знаю)/i;
 
 // ══════════════════════════════════════════════════════════
 // PUBLIC API
@@ -369,16 +369,23 @@ export function extractSlangSignals(text: string): Partial<SlangSignals> {
     signals.negativeFlags = negFlags;
   }
 
-  // Seller claims
+  // Seller claims — only trigger when there's seller context
+  // "не распил, не надгрыз" without seller context is a buyer preference (exclusion), not a seller claim
+  const hasSellerContext = /(?:продавец|хозяин|владелец|собственник)\s+(?:пишет|говорит|заявляет|утверждает|сказал)/i.test(low)
+    || /(?:в\s+объявлении|в\s+описании)/i.test(low);
   const claims: SellerClaim[] = [];
   for (const { pattern, meaning } of sellerClaimPatterns) {
     const m = low.match(pattern);
     if (m) {
-      claims.push({
-        original: m[0],
-        meaning,
-        trust: "soft_claim",
-      });
+      // "не распил/не надгрыз/не надкус" and "не перекуп/я хозяин" require seller context
+      const needsContext = meaning === "seller_claims_legal_import" || meaning === "seller_claims_owner";
+      if (!needsContext || hasSellerContext) {
+        claims.push({
+          original: m[0],
+          meaning,
+          trust: "soft_claim",
+        });
+      }
     }
   }
   if (claims.length > 0) {
@@ -421,14 +428,20 @@ export function extractSellerClaimSignals(text: string): SellerClaim[] {
   const low = text.toLowerCase().replace(/ё/g, "е");
   const claims: SellerClaim[] = [];
 
+  const hasSellerContext = /(?:продавец|хозяин|владелец|собственник)\s+(?:пишет|говорит|заявляет|утверждает|сказал)/i.test(low)
+    || /(?:в\s+объявлении|в\s+описании)/i.test(low);
+
   for (const { pattern, meaning } of sellerClaimPatterns) {
     const m = low.match(pattern);
     if (m) {
-      claims.push({
-        original: m[0],
-        meaning,
-        trust: "soft_claim",
-      });
+      const needsContext = meaning === "seller_claims_legal_import" || meaning === "seller_claims_owner";
+      if (!needsContext || hasSellerContext) {
+        claims.push({
+          original: m[0],
+          meaning,
+          trust: "soft_claim",
+        });
+      }
     }
   }
   return claims;

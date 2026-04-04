@@ -6,7 +6,6 @@ import {
   extractSlangSignals,
   extractExcludedNegativeFlags,
   extractSellerClaimSignals,
-  type SlangSignals,
   type SellerClaim,
 } from "./slang.js";
 
@@ -1518,7 +1517,7 @@ function extractStateUpdate(
   }
 
   // Trim level
-  if (/(?:самый\s+простой|попроще|(?<![а-яёА-ЯЁa-zA-Z0-9])база(?![а-яёА-ЯЁa-zA-Z0-9])|базов)/i.test(msg)) {
+  if (/(?:сам(?:ый|ая)\s+прост(?:ой|ая)|попроще|(?<![а-яёА-ЯЁa-zA-Z0-9])база(?![а-яёА-ЯЁa-zA-Z0-9])|базов)/i.test(msg)) {
     update.trimLevel = "base";
   } else if (/(?:средн(?:яя|ий|ее)|средн(?:\s|$))/i.test(msg)) {
     update.trimLevel = "mid";
@@ -1527,7 +1526,7 @@ function extractStateUpdate(
   }
 
   // Priority
-  if (/(?:подешевле|главное\s+дешевле|попроще.*цен|бюджетн|самый\s+простой)/i.test(msg)) {
+  if (/(?:подешевле|главное\s+дешевле|попроще.*цен|бюджетн|сам(?:ый|ая)\s+прост(?:ой|ая))/i.test(msg)) {
     update.priority = "cheapest";
   } else if (/(?:главное\s+живой|получше\s+состояни|хорош(?:ее|ий)\s+состояни)/i.test(msg)) {
     update.priority = "best_condition";
@@ -1625,7 +1624,7 @@ function extractStateUpdate(
 
   // ── Budget parsing ──
   // Detect "don't know the budget" / "show me approximate prices" FIRST
-  const BUDGET_UNKNOWN_RE = /(?:бюджет\s+не\s*знаю|не\s+знаю\s+бюджет|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|дай\s+примерн|засвети\s+стоимост|покажи\s+стоимост|сориентируй|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост))/i;
+  const BUDGET_UNKNOWN_RE = /(?:бюджет\s+не\s*знаю|не\s+знаю\s+бюджет|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост))/i;
   if (BUDGET_UNKNOWN_RE.test(msg)) {
     update.budgetText = "approximate_guidance";
   }
