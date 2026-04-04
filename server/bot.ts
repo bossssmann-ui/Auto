@@ -555,6 +555,20 @@ function violatesKnownModelGuard(reply: string, state: ConversationState): boole
     "какую модель",
     "какой тип техники",
     "что вас интересует",
+    "какую машину",
+    "какой автомобиль вы",
+    "какой кроссовер",
+    "какой внедорожник",
+    "какой транспорт",
+    "что именно вас интересует",
+    "что именно вы ищете",
+    "какой вид техники",
+    "расскажите, что вас",
+    "что вы хотите найти",
+    "какое авто",
+    "какой авто",
+    "легковой, мотоцикл",
+    "легковой автомобиль, мотоцикл",
   ];
   return forbidden.some(phrase => lower.includes(phrase));
 }
@@ -1317,7 +1331,7 @@ function extractStateUpdate(
   }
 
   // Priority
-  if (/(?:подешевле|главное\s+дешевле|попроще.*цен|бюджетн)/i.test(msg)) {
+  if (/(?:подешевле|главное\s+дешевле|попроще.*цен|бюджетн|самый\s+простой)/i.test(msg)) {
     update.priority = "cheapest";
   } else if (/(?:главное\s+живой|получше\s+состояни|хорош(?:ее|ий)\s+состояни)/i.test(msg)) {
     update.priority = "best_condition";
@@ -2053,6 +2067,39 @@ PARSED INTENT (структурированный разбор)
   // Step 3: apply update to persistent state (includes derive, stage transition, pending question)
   const mergedState = applyStateUpdate(mem.state, combinedUpdate, mergeSource);
   mem.state = mergedState;
+
+  // ── Fast-path: deterministic response when parser extracted enough data ──
+  // When model is known AND ≥2 filter/preference slots are filled, and we're
+  // still collecting data, use the deterministic response builder directly.
+  // This prevents the LLM from ignoring parsed state and asking generic questions
+  // (the root cause of the "bot is still тупой" production bug).
+  if (
+    mergedState.model != null &&
+    (mergedState.stage === "collecting_calc_params" || mergedState.stage === "collecting_filters")
+  ) {
+    const filledCount = [
+      mergedState.ageWindow != null,
+      mergedState.drivetrain != null,
+      mergedState.fuelType != null,
+      mergedState.trimLevel != null,
+      mergedState.year != null,
+      mergedState.budgetText != null,
+      mergedState.priority != null,
+      mergedState.auctionGradeMin != null,
+      mergedState.color != null,
+      mergedState.volumeCm3 != null,
+      mergedState.auctionPriceJPY != null,
+      mergedState.isForResale != null,
+      mergedState.isLegalEntity != null,
+      mergedState.auctionGradesAllowed.length > 0,
+    ].filter(Boolean).length;
+
+    if (filledCount >= 2) {
+      console.log(`🔀 Fast-path: deterministic response (${mergedState.make} ${mergedState.model}, ${filledCount} filters)`);
+      const plan = planReply(mergedState, userMessage);
+      return buildSafeFallbackReply(mergedState, plan);
+    }
+  }
 
   const recentMessages = mem.messages.filter(
     (m): m is { role: "user" | "assistant"; content: string } =>
