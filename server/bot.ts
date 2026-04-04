@@ -106,6 +106,43 @@ interface ToolCall {
   function: { name: string; arguments: string };
 }
 
+// ── Parsed car intent (parser-first pipeline) ────────────
+interface ParsedCarIntent {
+  intent: "car_search" | "price_calc" | "auction_explanation" | "other";
+  model: string | null;
+  make: string | null;
+  generation: string | null;
+  body: string | null;
+  ageWindow: "passable" | "non_passable" | null;
+  nonPassableType: "under_3_years" | "over_5_years" | null;
+  drivetrain: "fwd" | "rwd" | "4wd" | "awd" | null;
+  fuelType: "gasoline" | "hybrid" | "diesel" | "ev" | "phev" | null;
+  trimLevel: "base" | "mid" | "top" | null;
+  auctionGradesAllowed: string[];
+  budgetText: string | null;
+  priority: "cheapest" | "best_condition" | "balanced" | null;
+  needsClarification: string[];
+  notes: string[];
+}
+
+const DEFAULT_PARSED_INTENT: ParsedCarIntent = {
+  intent: "other",
+  model: null,
+  make: null,
+  generation: null,
+  body: null,
+  ageWindow: null,
+  nonPassableType: null,
+  drivetrain: null,
+  fuelType: null,
+  trimLevel: null,
+  auctionGradesAllowed: [],
+  budgetText: null,
+  priority: null,
+  needsClarification: [],
+  notes: [],
+};
+
 interface ConversationEntry {
   summary: string;
   messages: ChatMessage[];
@@ -235,6 +272,129 @@ async function maybeCompressMemory(userId: number): Promise<void> {
 
 // ── OpenRouter API helper ────────────────────────────────
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
+
+// ── Parser-first pipeline ────────────────────────────────
+const PARSER_SYSTEM_PROMPT = `You are a strict JSON extractor for a Russian car import business.
+Given a user message in Russian (possibly with slang), extract structured car-search filters.
+Return ONLY valid JSON matching this schema — no markdown, no code fences, no explanation:
+
+{
+  "intent": "car_search" | "price_calc" | "auction_explanation" | "other",
+  "model": string | null,
+  "make": string | null,
+  "generation": string | null,
+  "body": string | null,
+  "ageWindow": "passable" | "non_passable" | null,
+  "nonPassableType": "under_3_years" | "over_5_years" | null,
+  "drivetrain": "fwd" | "rwd" | "4wd" | "awd" | null,
+  "fuelType": "gasoline" | "hybrid" | "diesel" | "ev" | "phev" | null,
+  "trimLevel": "base" | "mid" | "top" | null,
+  "auctionGradesAllowed": string[],
+  "budgetText": string | null,
+  "priority": "cheapest" | "best_condition" | "balanced" | null,
+  "needsClarification": string[],
+  "notes": string[]
+}
+
+CRITICAL SLANG RULES:
+- "везел" / "везела" / "везёл" / "визел" → model="Honda Vezel", make="Honda". NEVER "вездеход".
+- "харек" → model="Toyota Harrier", make="Toyota"
+- "филдер" → model="Toyota Corolla Fielder", make="Toyota"
+- "приус" → model="Toyota Prius", make="Toyota"
+- "прадик" → model="Toyota Land Cruiser Prado", make="Toyota"
+- "фит" → model="Honda Fit", make="Honda"
+- "вокси" → model="Toyota Voxy", make="Toyota"
+- "рав" / "рав4" / "равчик" → model="Toyota RAV4", make="Toyota"
+- "форик" / "форестер" → model="Subaru Forester", make="Subaru"
+- "камри" / "камрюха" → model="Toyota Camry", make="Toyota"
+- "краун" → model="Toyota Crown", make="Toyota"
+- "лось" → make="Lexus", model=null (clarify specific model)
+- "крузак" → model="Toyota Land Cruiser", make="Toyota"
+- "цээрвуха" → model="Honda CR-V", make="Honda"
+- "ашэрвуха" → model="Honda HR-V", make="Honda"
+
+AGE RULES:
+- "проходной" / "проходная" → ageWindow="passable" (3-5 years, favorable customs)
+- "непроходной" / "непроходная" / "не проходной" → ageWindow="non_passable"
+- If non_passable and context says "свежий" or implies new → nonPassableType="under_3_years"
+- If non_passable and context says "старый" or implies old → nonPassableType="over_5_years"
+- If ambiguous which non_passable → nonPassableType=null, add "nonPassableType" to needsClarification
+
+FILTER RULES:
+- "передний привод" / "передний" → drivetrain="fwd"
+- "полный привод" / "вд" / "4вд" → drivetrain="4wd"
+- "самый простой" / "попроще" / "база" → trimLevel="base"
+- "максималка" / "жирная" → trimLevel="top"
+- "главное дешевле" / "подешевле" / "попроще" → priority="cheapest"
+- "оценка R тоже можно" / "R допустима" → add "R" to auctionGradesAllowed
+- "посчитай" / "посчитать" / "можешь посчитать" → intent="price_calc"
+
+If the message is not about cars at all, return intent="other" with all other fields null/empty.
+Return ONLY the JSON object. No other text.`;
+
+async function parseUserIntent(
+  userMessage: string,
+): Promise<ParsedCarIntent> {
+  const apiKey = process.env.OPENROUTER_KEY;
+  if (!apiKey) return { ...DEFAULT_PARSED_INTENT };
+
+  try {
+    const response = await fetch(OPENROUTER_API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:3001",
+        "X-OpenRouter-Title": "SpecTechMash Telegram Bot",
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          { role: "system", content: PARSER_SYSTEM_PROMPT },
+          { role: "user", content: userMessage },
+        ],
+        temperature: 0,
+        max_tokens: 512,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error(`⚠️ Parser call failed: ${response.status} ${response.statusText}`);
+      return { ...DEFAULT_PARSED_INTENT };
+    }
+
+    const data: OpenRouterResponse = await response.json();
+    const raw = data?.choices?.[0]?.message?.content;
+    if (typeof raw !== "string" || raw.trim().length === 0) {
+      return { ...DEFAULT_PARSED_INTENT };
+    }
+
+    // Strip possible markdown code fences despite instructions
+    const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+    const parsed = JSON.parse(cleaned) as Partial<ParsedCarIntent>;
+
+    return {
+      intent: parsed.intent ?? "other",
+      model: parsed.model ?? null,
+      make: parsed.make ?? null,
+      generation: parsed.generation ?? null,
+      body: parsed.body ?? null,
+      ageWindow: parsed.ageWindow ?? null,
+      nonPassableType: parsed.nonPassableType ?? null,
+      drivetrain: parsed.drivetrain ?? null,
+      fuelType: parsed.fuelType ?? null,
+      trimLevel: parsed.trimLevel ?? null,
+      auctionGradesAllowed: Array.isArray(parsed.auctionGradesAllowed) ? parsed.auctionGradesAllowed : [],
+      budgetText: parsed.budgetText ?? null,
+      priority: parsed.priority ?? null,
+      needsClarification: Array.isArray(parsed.needsClarification) ? parsed.needsClarification : [],
+      notes: Array.isArray(parsed.notes) ? parsed.notes : [],
+    };
+  } catch (err) {
+    console.error("⚠️ Parser error (falling back to default intent):", err);
+    return { ...DEFAULT_PARSED_INTENT };
+  }
+}
 
 async function chatCompletion(chatId: number, userMessage: string): Promise<string> {
   const apiKey = process.env.OPENROUTER_KEY;
@@ -547,7 +707,21 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 • Не обещай невозможного.
 • Не используй манипуляции или агрессивные тактики продаж.
 • Если уверенность в правовых/таможенных деталях низкая — скажи «нужно уточнить у менеджера».
+
+════════════════════════════════════════════
+PARSED INTENT (структурированный разбор)
+════════════════════════════════════════════
+
+Перед твоим ответом система автоматически извлекла структурированные фильтры из сообщения клиента (Parsed user intent). Если он предоставлен:
+• ДОВЕРЯЙ извлечённым полям: model, make, drivetrain, trimLevel, ageWindow, auctionGradesAllowed и др.
+• НЕ переспрашивай то, что уже заполнено (например, если model="Honda Vezel" — работай с Vezel, не спрашивай "какую машину хотите?").
+• НЕ переинтерпретируй модель в абстрактный класс техники.
+• Задавай вопросы ТОЛЬКО по полям, перечисленным в needsClarification, или по критически недостающим данным (бюджет, точный диапазон лет).
+• Если intent="price_calc" но данных для calculate_vehicle_price недостаточно — подтверди фильтры и спроси только недостающее (аукционная цена в йенах, объём двигателя, точный возраст).
 `.trim();
+
+  // ── Parser-first: extract structured intent before replying ──
+  const parsedIntent = await parseUserIntent(userMessage);
 
   const mem = getMemory(chatId);
 
@@ -556,6 +730,12 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
       (m.role === "user" || m.role === "assistant") &&
       typeof m.content === "string",
   );
+
+  // Build parsed intent context message (only when intent is car-related)
+  const parsedIntentMessages: Array<{ role: "system"; content: string }> =
+    parsedIntent.intent !== "other"
+      ? [{ role: "system" as const, content: `Parsed user intent (trust these extracted filters, do NOT re-interpret the model or ask questions about fields that are already filled): ${JSON.stringify(parsedIntent)}` }]
+      : [];
 
   const body = {
     model: MODEL,
@@ -569,6 +749,7 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
             },
           ]
         : []),
+      ...parsedIntentMessages,
       ...recentMessages,
       { role: "user", content: userMessage }
     ],
