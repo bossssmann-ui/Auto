@@ -656,12 +656,12 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
   else if (state.drivetrain === "rwd") knownParts.push("задний привод");
   else if (state.drivetrain === "4wd") knownParts.push("полный привод");
 
-  if (state.trimLevel === "base") knownParts.push("база");
+  if (state.trimLevel === "base") knownParts.push("самая простая комплектация");
   else if (state.trimLevel === "mid") knownParts.push("средняя комплектация");
-  else if (state.trimLevel === "top") knownParts.push("максималка");
+  else if (state.trimLevel === "top") knownParts.push("топовая комплектация");
 
   if (state.auctionGradesAllowed.length > 0) {
-    knownParts.push(`${state.auctionGradesAllowed.join(", ")} допускается`);
+    knownParts.push(`оценка ${state.auctionGradesAllowed.join(", ")} допустима`);
   }
   if (state.auctionGradeMin) knownParts.push(`оценка от ${state.auctionGradeMin}`);
 
@@ -675,7 +675,8 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
   if (state.volumeCm3) knownParts.push(`объём: ${state.volumeCm3} см³`);
   if (state.isForResale != null) knownParts.push(state.isForResale ? "для перепродажи" : "для себя");
   if (state.isLegalEntity != null) knownParts.push(state.isLegalEntity ? "юрлицо" : "физлицо");
-  if (state.priority === "cheapest") knownParts.push("подешевле");
+  // Only show priority if it adds info beyond trimLevel
+  if (state.priority === "cheapest" && state.trimLevel !== "base") knownParts.push("подешевле");
   else if (state.priority === "best_condition") knownParts.push("лучшее состояние");
 
   // ── Build confirmation line ──
@@ -696,19 +697,19 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
 
   if (state.activeIntent === "price_calc") {
     if (state.ageWindow === "non_passable" && !state.nonPassableType) {
-      missingQuestions.push("это свежий до 3 лет или старше 5 лет");
+      missingQuestions.push("нужен вариант до 3 лет или старше 5 лет");
     }
     if (!state.year && !state.ageWindow) {
-      missingQuestions.push("какой год или возрастное окно");
+      missingQuestions.push("какой год или возрастная категория");
     }
     if (!state.auctionPriceJPY && !state.budgetText) {
-      missingQuestions.push("какая цена на аукционе в йенах или бюджет");
+      missingQuestions.push("какой бюджет или цена покупки в йенах");
     }
     if (!state.volumeCm3) {
       missingQuestions.push("какой объём двигателя");
     }
     if (state.isForResale == null && state.isLegalEntity == null) {
-      missingQuestions.push("оформление на физлицо / юрлицо / перепродажу");
+      missingQuestions.push("оформление на физлицо, юрлицо или под перепродажу");
     } else {
       if (state.isForResale == null) missingQuestions.push("для перепродажи или для себя");
       if (state.isLegalEntity == null) missingQuestions.push("физлицо или юрлицо");
@@ -726,7 +727,7 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
   }
 
   if (missingQuestions.length > 0) {
-    parts.push(`Уточни только: ${missingQuestions.join(", ")}.`);
+    parts.push(`Уточни, пожалуйста: ${missingQuestions.join(", ")}.`);
   } else if (state.stage === "ready_to_calculate") {
     parts.push("Все данные есть, сейчас посчитаю.");
   }
