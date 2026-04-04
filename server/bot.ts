@@ -1,6 +1,13 @@
 import { Telegraf } from "telegraf";
 import "dotenv/config";
 import { calculateTurnkeyPrice, type CalcParams } from "./calculator";
+import {
+  normalizeAutoSlang,
+  extractSlangSignals,
+  extractExcludedNegativeFlags,
+  extractSellerClaimSignals,
+  type SellerClaim,
+} from "./slang.js";
 
 // ── Cyrillic-aware word boundary fix ─────────────────────
 // JavaScript \b only matches ASCII [a-zA-Z0-9_] boundaries and silently fails
@@ -166,6 +173,17 @@ interface ConversationState {
   turnIndex: number;
 
   slotMeta: Partial<Record<SlotKey, SlotMeta>>;
+
+  // ── Slang-derived fields ──
+  transmission: "manual" | "automatic" | "cvt" | null;
+  condition: "poor" | "decent" | null;
+  hasSunroof: boolean;
+  hasClimate: boolean;
+  manualWindows: boolean;
+  turbo: boolean;
+  noRussiaMileage: boolean;
+  sellerClaims: SellerClaim[];
+  excludedNegativeFlags: string[];
 }
 
 const DEFAULT_CONVERSATION_STATE: ConversationState = {
@@ -198,6 +216,15 @@ const DEFAULT_CONVERSATION_STATE: ConversationState = {
   lastResolvedModelAlias: null,
   turnIndex: 0,
   slotMeta: {},
+  transmission: null,
+  condition: null,
+  hasSunroof: false,
+  hasClimate: false,
+  manualWindows: false,
+  turbo: false,
+  noRussiaMileage: false,
+  sellerClaims: [],
+  excludedNegativeFlags: [],
 };
 
 /**
@@ -435,6 +462,34 @@ function buildKnownFiltersSummary(state: ConversationState): string {
   if (state.isForResale != null) parts.push(state.isForResale ? "для перепродажи" : "для себя");
   if (state.isLegalEntity != null) parts.push(state.isLegalEntity ? "юрлицо" : "физлицо");
   if (state.mileageText) parts.push(`пробег: ${state.mileageText}`);
+
+  // Slang-derived details
+  if (state.body) parts.push(`кузов: ${state.body}`);
+  if (state.transmission === "manual") parts.push("КПП: механика");
+  else if (state.transmission === "automatic") parts.push("КПП: автомат");
+  else if (state.transmission === "cvt") parts.push("КПП: вариатор");
+  if (state.condition === "poor") parts.push("состояние: плохое");
+  else if (state.condition === "decent") parts.push("состояние: живое");
+  if (state.hasSunroof) parts.push("люк: да");
+  if (state.hasClimate) parts.push("климат-контроль: да");
+  if (state.manualWindows) parts.push("ручные стеклоподъёмники");
+  if (state.turbo) parts.push("турбо");
+  if (state.noRussiaMileage) parts.push("без пробега по РФ");
+  if (state.excludedNegativeFlags.length > 0) {
+    const flagLabels: Record<string, string> = {
+      flood_damage: "не топляк",
+      rollover_history: "не перевёртыш",
+      cut_import: "не распил",
+      constructor_import: "не конструктор",
+      poor_condition: "не убитая",
+    };
+    const labels = state.excludedNegativeFlags.map(f => flagLabels[f] ?? f);
+    parts.push(`исключено: ${labels.join(", ")}`);
+  }
+  if (state.sellerClaims.length > 0) {
+    const claimTexts = state.sellerClaims.map(c => `продавец заявляет: ${c.original}`);
+    parts.push(claimTexts.join("; "));
+  }
 
   return parts.join("; ");
 }
@@ -679,6 +734,35 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
   // Only show priority if it adds info beyond trimLevel
   if (state.priority === "cheapest" && state.trimLevel !== "base") knownParts.push("подешевле");
   else if (state.priority === "best_condition") knownParts.push("лучшее состояние");
+
+  // Slang-derived details in confirmation
+  if (state.body) knownParts.push(`кузов: ${state.body}`);
+  if (state.transmission === "manual") knownParts.push("механика");
+  else if (state.transmission === "automatic") knownParts.push("автомат");
+  else if (state.transmission === "cvt") knownParts.push("вариатор");
+  if (state.hasSunroof) knownParts.push("с люком");
+  if (state.hasClimate) knownParts.push("климат-контроль");
+  if (state.manualWindows) knownParts.push("ручные стеклоподъёмники");
+  if (state.turbo) knownParts.push("турбо");
+  if (state.noRussiaMileage) knownParts.push("без пробега по РФ");
+  if (state.condition === "decent") knownParts.push("живое состояние");
+  if (state.excludedNegativeFlags.length > 0) {
+    const flagLabels: Record<string, string> = {
+      flood_damage: "не топляк",
+      rollover_history: "не перевёртыш",
+      cut_import: "не распил",
+      constructor_import: "не конструктор",
+      poor_condition: "не убитая",
+    };
+    const labels = state.excludedNegativeFlags.map(f => flagLabels[f] ?? f);
+    knownParts.push(labels.join(", "));
+  }
+  // Seller claims — cautious language
+  if (state.sellerClaims.length > 0) {
+    for (const claim of state.sellerClaims) {
+      knownParts.push(`продавец заявляет: ${claim.original}`);
+    }
+  }
 
   // ── Build confirmation line ──
   const modelName = state.model
@@ -966,6 +1050,20 @@ function applyStateUpdate(
     return [...set];
   };
 
+  // Merge seller claims by meaning (deduplicated by meaning field)
+  const mergeSellerClaims = (prev: SellerClaim[], cur: SellerClaim[]): SellerClaim[] => {
+    if (cur.length === 0) return prev;
+    const seen = new Set(prev.map(c => c.meaning));
+    const merged = [...prev];
+    for (const claim of cur) {
+      if (!seen.has(claim.meaning)) {
+        merged.push(claim);
+        seen.add(claim.meaning);
+      }
+    }
+    return merged;
+  };
+
   // For model/make: never erase if current omitted them
   const model = current.model ?? base.model;
   const make = current.make ?? base.make;
@@ -1001,6 +1099,16 @@ function applyStateUpdate(
     lastResolvedModelAlias: current.lastResolvedModelAlias ?? base.lastResolvedModelAlias,
     turnIndex: nextTurn,
     slotMeta: mergedSlotMeta,
+    // Slang-derived fields
+    transmission: pick(base.transmission, current.transmission),
+    condition: pick(base.condition, current.condition),
+    hasSunroof: current.hasSunroof || base.hasSunroof,
+    hasClimate: current.hasClimate || base.hasClimate,
+    manualWindows: current.manualWindows || base.manualWindows,
+    turbo: current.turbo || base.turbo,
+    noRussiaMileage: current.noRussiaMileage || base.noRussiaMileage,
+    sellerClaims: mergeSellerClaims(base.sellerClaims, current.sellerClaims ?? []),
+    excludedNegativeFlags: mergeArrays(base.excludedNegativeFlags, current.excludedNegativeFlags ?? []),
   };
 
   // ── Step 5–7: Post-merge pipeline ──
@@ -1214,7 +1322,11 @@ function extractStateUpdate(
   userMessage: string,
   previousState: ConversationState,
 ): StateUpdate {
-  let msg = userMessage.toLowerCase().replace(/ё/g, "е");
+  // ── Slang normalization pass ──
+  // Apply auto-slang normalization BEFORE lowering — preserves case for model matching
+  const slangNormalized = normalizeAutoSlang(userMessage);
+
+  let msg = slangNormalized.toLowerCase().replace(/ё/g, "е");
 
   // ── Russian numeric word normalization ──
   // Normalize Russian number words to digits so downstream regexes work uniformly.
@@ -1227,6 +1339,75 @@ function extractStateUpdate(
 
   const update: Partial<ConversationState> = {};
   const clearFields: ClearableField[] = [];
+
+  // ── Extract slang signals from the ORIGINAL text (before normalization) ──
+  const slangSignals = extractSlangSignals(userMessage);
+  const sellerClaims = extractSellerClaimSignals(userMessage);
+  const excludedNegFlags = extractExcludedNegativeFlags(userMessage);
+
+  // Apply slang signals to update (only if detected)
+  if (slangSignals.transmission) {
+    update.transmission = slangSignals.transmission;
+  }
+  if (slangSignals.drivetrain) {
+    update.drivetrain = slangSignals.drivetrain;
+  }
+  if (slangSignals.trimLevel) {
+    update.trimLevel = slangSignals.trimLevel;
+  }
+  if (slangSignals.fuelType) {
+    update.fuelType = slangSignals.fuelType;
+  }
+  if (slangSignals.steering) {
+    update.steering = slangSignals.steering;
+  }
+  if (slangSignals.body) {
+    update.body = slangSignals.body;
+  }
+  if (slangSignals.condition) {
+    update.condition = slangSignals.condition;
+  }
+  if (slangSignals.hasSunroof) {
+    update.hasSunroof = true;
+  }
+  if (slangSignals.hasClimate) {
+    update.hasClimate = true;
+  }
+  if (slangSignals.manualWindows) {
+    update.manualWindows = true;
+  }
+  if (slangSignals.turbo) {
+    update.turbo = true;
+  }
+  if (slangSignals.noRussiaMileage) {
+    update.noRussiaMileage = true;
+  }
+  if (slangSignals.engineVolume) {
+    update.volumeCm3 = Math.round(slangSignals.engineVolume * 1000);
+  }
+  if (slangSignals.isForResale != null) {
+    update.isForResale = slangSignals.isForResale;
+  }
+  if (slangSignals.isLegalEntity != null) {
+    update.isLegalEntity = slangSignals.isLegalEntity;
+  }
+  if (slangSignals.priority === "cheapest") {
+    update.priority = "cheapest";
+  } else if (slangSignals.priority === "better_condition") {
+    update.priority = "best_condition";
+  }
+  if (slangSignals.color) {
+    update.color = slangSignals.color;
+  }
+  if (slangSignals.budgetGuidance) {
+    update.budgetText = "approximate_guidance";
+  }
+  if (sellerClaims.length > 0) {
+    update.sellerClaims = sellerClaims;
+  }
+  if (excludedNegFlags.length > 0) {
+    update.excludedNegativeFlags = excludedNegFlags;
+  }
 
   // ── Deterministic clear rules ──
   if (/(?:цвет\s+не\s*важ|любой\s+цвет|без\s+разницы\s+по\s+цвету)/i.test(msg)) {
@@ -1350,7 +1531,8 @@ function extractStateUpdate(
   }
 
   // Trim level
-  if (/(?:самый\s+простой|попроще|(?<![а-яёА-ЯЁa-zA-Z0-9])база(?![а-яёА-ЯЁa-zA-Z0-9])|базов)/i.test(msg)) {
+  const BASE_TRIM_RE = /(?:сам(?:ый|ая)\s+прост(?:ой|ая)|попроще|(?<![а-яёА-ЯЁa-zA-Z0-9])база(?![а-яёА-ЯЁa-zA-Z0-9])|базов)/i;
+  if (BASE_TRIM_RE.test(msg)) {
     update.trimLevel = "base";
   } else if (/(?:средн(?:яя|ий|ее)|средн(?:\s|$))/i.test(msg)) {
     update.trimLevel = "mid";
@@ -1359,7 +1541,7 @@ function extractStateUpdate(
   }
 
   // Priority
-  if (/(?:подешевле|главное\s+дешевле|попроще.*цен|бюджетн|самый\s+простой)/i.test(msg)) {
+  if (/(?:подешевле|главное\s+дешевле|попроще.*цен|бюджетн)/i.test(msg) || BASE_TRIM_RE.test(msg)) {
     update.priority = "cheapest";
   } else if (/(?:главное\s+живой|получше\s+состояни|хорош(?:ее|ий)\s+состояни)/i.test(msg)) {
     update.priority = "best_condition";
@@ -1457,7 +1639,7 @@ function extractStateUpdate(
 
   // ── Budget parsing ──
   // Detect "don't know the budget" / "show me approximate prices" FIRST
-  const BUDGET_UNKNOWN_RE = /(?:бюджет\s+не\s*знаю|не\s+знаю\s+бюджет|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|дай\s+примерн|засвети\s+стоимост|покажи\s+стоимост|сориентируй|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост))/i;
+  const BUDGET_UNKNOWN_RE = /(?:бюджет\s+не\s*знаю|не\s+знаю\s+бюджет|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост))/i;
   if (BUDGET_UNKNOWN_RE.test(msg)) {
     update.budgetText = "approximate_guidance";
   }
