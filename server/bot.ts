@@ -109,23 +109,41 @@ interface ToolCall {
 // ── Conversation state (parser-first pipeline) ───────────
 interface ConversationState {
   activeIntent: "car_search" | "price_calc" | "auction_explanation" | "other";
+
   model: string | null;
   make: string | null;
   generation: string | null;
-  year: number | null;
-  color: string | null;
   body: string | null;
+
+  year: number | null;
+  yearText: string | null;
+
   ageWindow: "passable" | "non_passable" | null;
   nonPassableType: "under_3_years" | "over_5_years" | null;
-  drivetrain: "fwd" | "rwd" | "4wd" | "awd" | null;
+
+  drivetrain: "fwd" | "rwd" | "4wd" | null;
+  steering: "rhd" | "lhd" | null;
+
   fuelType: "gasoline" | "hybrid" | "diesel" | "ev" | "phev" | null;
   trimLevel: "base" | "mid" | "top" | null;
+
+  color: string | null;
+  mileageText: string | null;
+
   auctionGradeMin: string | null;
   auctionGradesAllowed: string[];
-  mileageText: string | null;
+
   budgetText: string | null;
+  auctionPriceJPY: number | null;
+  volumeCm3: number | null;
+
+  isForResale: boolean | null;
+  isLegalEntity: boolean | null;
+
   priority: "cheapest" | "best_condition" | "balanced" | null;
+
   needsClarification: string[];
+  lastResolvedModelAlias: string | null;
 }
 
 const DEFAULT_CONVERSATION_STATE: ConversationState = {
@@ -133,27 +151,34 @@ const DEFAULT_CONVERSATION_STATE: ConversationState = {
   model: null,
   make: null,
   generation: null,
-  year: null,
-  color: null,
   body: null,
+  year: null,
+  yearText: null,
   ageWindow: null,
   nonPassableType: null,
   drivetrain: null,
+  steering: null,
   fuelType: null,
   trimLevel: null,
+  color: null,
+  mileageText: null,
   auctionGradeMin: null,
   auctionGradesAllowed: [],
-  mileageText: null,
   budgetText: null,
+  auctionPriceJPY: null,
+  volumeCm3: null,
+  isForResale: null,
+  isLegalEntity: null,
   priority: null,
   needsClarification: [],
+  lastResolvedModelAlias: null,
 };
 
 interface ConversationEntry {
   summary: string;
   messages: ChatMessage[];
   lastActivity: number;
-  parsedIntent: ConversationState;
+  state: ConversationState;
 }
 
 const conversations = new Map<number, ConversationEntry>();
@@ -173,7 +198,7 @@ setInterval(() => {
 function getMemory(userId: number): ConversationEntry {
   let entry = conversations.get(userId);
   if (!entry) {
-    entry = { summary: "", messages: [], lastActivity: Date.now(), parsedIntent: { ...DEFAULT_CONVERSATION_STATE } };
+    entry = { summary: "", messages: [], lastActivity: Date.now(), state: { ...DEFAULT_CONVERSATION_STATE } };
     conversations.set(userId, entry);
   }
   entry.lastActivity = Date.now();
@@ -207,32 +232,34 @@ function isFollowUpFilter(message: string): boolean {
 /** Merge current conversation state with previous, preserving already-known fields */
 function mergeConversationState(
   previous: ConversationState,
-  current: ConversationState,
+  current: Partial<ConversationState>,
 ): ConversationState {
   // If current looks like "other" but previous has a known model and current
   // message is likely a follow-up filter, preserve the previous car-related intent
+  const currentIntent = current.activeIntent ?? "other";
   const effectiveIntent =
-    current.activeIntent === "other" && previous.model != null
+    currentIntent === "other" && previous.model != null
       ? previous.activeIntent
-      : current.activeIntent !== "other"
-        ? current.activeIntent
+      : currentIntent !== "other"
+        ? currentIntent
         : previous.activeIntent;
 
-  // Helper: pick current value if it's non-null, otherwise keep previous
-  const pick = <T>(prev: T | null, cur: T | null): T | null => cur ?? prev;
+  // Helper: pick current value if it's non-null/undefined, otherwise keep previous
+  const pick = <T>(prev: T | null, cur: T | null | undefined): T | null =>
+    cur !== undefined && cur !== null ? cur : prev;
 
   // For model/make: never erase if current omitted them
   const model = current.model ?? previous.model;
   const make = current.make ?? previous.make;
 
   // Merge arrays by union (deduplicated)
-  const mergeArrays = (prev: string[], cur: string[]): string[] => {
+  const mergeArrays = (prev: string[], cur: string[] | undefined): string[] => {
+    if (!cur || cur.length === 0) return prev;
     const set = new Set([...prev, ...cur]);
     return [...set];
   };
 
   // For needsClarification: remove items that are now resolved
-  // NOTE: keys here must match field names in ConversationState
   const mergedClarification = previous.needsClarification.filter((item) => {
     const fieldMap: Record<string, unknown> = {
       nonPassableType: current.nonPassableType,
@@ -245,11 +272,14 @@ function mergeConversationState(
       color: current.color,
       mileageText: current.mileageText,
       auctionGradeMin: current.auctionGradeMin,
+      steering: current.steering,
+      volumeCm3: current.volumeCm3,
+      auctionPriceJPY: current.auctionPriceJPY,
     };
     return !(item in fieldMap && fieldMap[item] != null);
   });
   // Add new clarifications from current
-  for (const item of current.needsClarification) {
+  for (const item of current.needsClarification ?? []) {
     if (!mergedClarification.includes(item)) {
       mergedClarification.push(item);
     }
@@ -260,20 +290,27 @@ function mergeConversationState(
     model,
     make,
     generation: pick(previous.generation, current.generation),
-    year: pick(previous.year, current.year),
-    color: pick(previous.color, current.color),
     body: pick(previous.body, current.body),
+    year: pick(previous.year, current.year),
+    yearText: pick(previous.yearText, current.yearText),
     ageWindow: pick(previous.ageWindow, current.ageWindow),
     nonPassableType: pick(previous.nonPassableType, current.nonPassableType),
     drivetrain: pick(previous.drivetrain, current.drivetrain),
+    steering: pick(previous.steering, current.steering),
     fuelType: pick(previous.fuelType, current.fuelType),
     trimLevel: pick(previous.trimLevel, current.trimLevel),
+    color: pick(previous.color, current.color),
+    mileageText: pick(previous.mileageText, current.mileageText),
     auctionGradeMin: pick(previous.auctionGradeMin, current.auctionGradeMin),
     auctionGradesAllowed: mergeArrays(previous.auctionGradesAllowed, current.auctionGradesAllowed),
-    mileageText: pick(previous.mileageText, current.mileageText),
     budgetText: pick(previous.budgetText, current.budgetText),
+    auctionPriceJPY: pick(previous.auctionPriceJPY, current.auctionPriceJPY),
+    volumeCm3: pick(previous.volumeCm3, current.volumeCm3),
+    isForResale: pick(previous.isForResale, current.isForResale),
+    isLegalEntity: pick(previous.isLegalEntity, current.isLegalEntity),
     priority: pick(previous.priority, current.priority),
     needsClarification: mergedClarification,
+    lastResolvedModelAlias: current.lastResolvedModelAlias ?? previous.lastResolvedModelAlias,
   };
 }
 
@@ -377,7 +414,337 @@ async function maybeCompressMemory(userId: number): Promise<void> {
 // ── OpenRouter API helper ────────────────────────────────
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-// ── Parser-first pipeline ────────────────────────────────
+// ── Deterministic parser (primary — no LLM) ──────────────
+
+/** Slang-to-model dictionary. Keys are lowercase, NFD-normalized. */
+const MODEL_SLANG: Array<{ patterns: RegExp; make: string; model: string | null }> = [
+  // Honda
+  { patterns: /\b(?:везел[аеёо]?|визел[аеёо]?|везёл[аеёо]?)\b/i, make: "Honda", model: "Vezel" },
+  { patterns: /\b(?:фит|фита)\b/i, make: "Honda", model: "Fit" },
+  { patterns: /\b(?:цээрвух[аи]?|cr-?v)\b/i, make: "Honda", model: "CR-V" },
+  { patterns: /\b(?:ашэрвух[аи]?|hr-?v)\b/i, make: "Honda", model: "HR-V" },
+  { patterns: /\b(?:шаттл|фит\s*шаттл)\b/i, make: "Honda", model: "Fit Shuttle" },
+  // Toyota
+  { patterns: /\b(?:харе[кг]|харьк[аи]?)\b/i, make: "Toyota", model: "Harrier" },
+  { patterns: /\b(?:филдер[аи]?)\b/i, make: "Toyota", model: "Corolla Fielder" },
+  { patterns: /\b(?:приус[аеёо]?|prius)\b/i, make: "Toyota", model: "Prius" },
+  { patterns: /\b(?:прадик[аи]?|prado)\b/i, make: "Toyota", model: "Land Cruiser Prado" },
+  { patterns: /\b(?:вокси|вокс)\b/i, make: "Toyota", model: "Voxy" },
+  { patterns: /\b(?:ноах|ной)\b/i, make: "Toyota", model: "Noah" },
+  { patterns: /\b(?:рав(?:чик)?|рав\s*4|rav\s*4)\b/i, make: "Toyota", model: "RAV4" },
+  { patterns: /\b(?:камр(?:и|юх[аи]?))\b/i, make: "Toyota", model: "Camry" },
+  { patterns: /\b(?:краун)\b/i, make: "Toyota", model: "Crown" },
+  { patterns: /\b(?:крузак[аи]?)\b/i, make: "Toyota", model: "Land Cruiser" },
+  { patterns: /\b(?:сиента)\b/i, make: "Toyota", model: "Sienta" },
+  { patterns: /\b(?:пассо)\b/i, make: "Toyota", model: "Passo" },
+  { patterns: /\b(?:танк)\b/i, make: "Toyota", model: "Tank" },
+  { patterns: /\b(?:руми)\b/i, make: "Toyota", model: "Roomy" },
+  { patterns: /\b(?:виш)\b/i, make: "Toyota", model: "Wish" },
+  { patterns: /\b(?:суксид)\b/i, make: "Toyota", model: "Succeed" },
+  { patterns: /\b(?:пробокс)\b/i, make: "Toyota", model: "Probox" },
+  { patterns: /\b(?:рактис)\b/i, make: "Toyota", model: "Ractis" },
+  { patterns: /\b(?:марк)\b/i, make: "Toyota", model: "Mark II" },
+  { patterns: /\b(?:чайзер|чайник)\b/i, make: "Toyota", model: "Chaser" },
+  // Nissan
+  { patterns: /\b(?:серена)\b/i, make: "Nissan", model: "Serena" },
+  { patterns: /\b(?:эльгранд)\b/i, make: "Nissan", model: "Elgrand" },
+  { patterns: /\b(?:виноград)\b/i, make: "Nissan", model: "Wingroad" },
+  { patterns: /\b(?:ad|адэха)\b/i, make: "Nissan", model: "AD" },
+  // Subaru
+  { patterns: /\b(?:форик|форестер|форесрер)\b/i, make: "Subaru", model: "Forester" },
+  // Mitsubishi
+  { patterns: /\b(?:паджер(?:о|ик)|пыжик)\b/i, make: "Mitsubishi", model: "Pajero" },
+  // Suzuki
+  { patterns: /\b(?:эскуд(?:о|ик))\b/i, make: "Suzuki", model: "Escudo" },
+  // Lexus (make only)
+  { patterns: /\b(?:лось)\b/i, make: "Lexus", model: null },
+];
+
+/** Explicit make names (full brand match) */
+const MAKE_PATTERNS: Array<{ pattern: RegExp; make: string }> = [
+  { pattern: /\b(?:тойота|toyota)\b/i, make: "Toyota" },
+  { pattern: /\b(?:хонда|honda)\b/i, make: "Honda" },
+  { pattern: /\b(?:ниссан|nissan)\b/i, make: "Nissan" },
+  { pattern: /\b(?:субару|subaru)\b/i, make: "Subaru" },
+  { pattern: /\b(?:мицубиси|мицубиши|mitsubishi)\b/i, make: "Mitsubishi" },
+  { pattern: /\b(?:мазда|mazda)\b/i, make: "Mazda" },
+  { pattern: /\b(?:сузуки|suzuki)\b/i, make: "Suzuki" },
+  { pattern: /\b(?:лексус|lexus)\b/i, make: "Lexus" },
+  { pattern: /\b(?:инфинити|infiniti)\b/i, make: "Infiniti" },
+  { pattern: /\b(?:дайхатсу|daihatsu)\b/i, make: "Daihatsu" },
+];
+
+/** Explicit model names (when user types full model name) */
+const EXPLICIT_MODEL_PATTERNS: Array<{ pattern: RegExp; make: string; model: string }> = [
+  { pattern: /\b(?:vezel)\b/i, make: "Honda", model: "Vezel" },
+  { pattern: /\b(?:harrier)\b/i, make: "Toyota", model: "Harrier" },
+  { pattern: /\b(?:fielder)\b/i, make: "Toyota", model: "Corolla Fielder" },
+  { pattern: /\b(?:forester)\b/i, make: "Subaru", model: "Forester" },
+  { pattern: /\b(?:voxy)\b/i, make: "Toyota", model: "Voxy" },
+  { pattern: /\b(?:noah)\b/i, make: "Toyota", model: "Noah" },
+  { pattern: /\b(?:serena)\b/i, make: "Nissan", model: "Serena" },
+  { pattern: /\b(?:camry)\b/i, make: "Toyota", model: "Camry" },
+  { pattern: /\b(?:crown)\b/i, make: "Toyota", model: "Crown" },
+  { pattern: /\b(?:pajero)\b/i, make: "Mitsubishi", model: "Pajero" },
+];
+
+/** Color dictionary */
+const COLOR_PATTERNS: Array<{ pattern: RegExp; color: string }> = [
+  { pattern: /\b(?:любой\s+светл|светл[аыйое])/i, color: "light" },
+  { pattern: /\b(?:бел[аыйое])/i, color: "белый" },
+  { pattern: /\b(?:серебрист[аыйое])/i, color: "серебристый" },
+  { pattern: /\b(?:сер[аыйое])\b/i, color: "серый" },
+  { pattern: /\b(?:черн[аыйое]|чёрн[аыйое])/i, color: "чёрный" },
+  { pattern: /\b(?:синь|син[аыйиое])/i, color: "синий" },
+  { pattern: /\b(?:красн[аыйое])/i, color: "красный" },
+  { pattern: /\b(?:бежев[аыйое])/i, color: "бежевый" },
+  { pattern: /\b(?:любой\s+тёмн|любой\s+темн|тёмн[аыйое]|темн[аыйое])/i, color: "dark" },
+  { pattern: /\b(?:зелён[аыйое]|зелен[аыйое])/i, color: "зелёный" },
+  { pattern: /\b(?:перламутр)/i, color: "перламутр" },
+];
+
+/**
+ * Deterministic state extractor — regex/dictionary based.
+ * This is the PRIMARY parser. No LLM calls.
+ */
+function extractStateUpdate(
+  userMessage: string,
+  previousState: ConversationState,
+): Partial<ConversationState> {
+  const msg = userMessage.toLowerCase().replace(/ё/g, "е");
+  const update: Partial<ConversationState> = {};
+  const clarifications: string[] = [];
+
+  // ── A) Model / slang resolution ──
+  let matchedAlias: string | null = null;
+  for (const entry of MODEL_SLANG) {
+    const m = userMessage.match(entry.patterns);
+    if (m) {
+      update.make = entry.make;
+      update.model = entry.model;
+      matchedAlias = m[0].toLowerCase();
+      break;
+    }
+  }
+  // Try explicit model names if no slang match
+  if (!update.model) {
+    for (const entry of EXPLICIT_MODEL_PATTERNS) {
+      if (entry.pattern.test(userMessage)) {
+        update.make = entry.make;
+        update.model = entry.model;
+        break;
+      }
+    }
+  }
+  // Try explicit make names (without model)
+  if (!update.make) {
+    for (const entry of MAKE_PATTERNS) {
+      if (entry.pattern.test(userMessage)) {
+        update.make = entry.make;
+        break;
+      }
+    }
+  }
+  if (matchedAlias) {
+    update.lastResolvedModelAlias = matchedAlias;
+  }
+
+  // ── B) Filter parsing ──
+
+  // Age window
+  if (/(?:не\s*проходн|непроходн)/i.test(msg)) {
+    update.ageWindow = "non_passable";
+    if (/свеж/i.test(msg)) {
+      update.nonPassableType = "under_3_years";
+    } else if (/стар/i.test(msg)) {
+      update.nonPassableType = "over_5_years";
+    } else if (!previousState.nonPassableType) {
+      clarifications.push("nonPassableType");
+    }
+  } else if (/проходн/i.test(msg)) {
+    update.ageWindow = "passable";
+  }
+
+  // Drivetrain
+  if (/(?:передн(?:ий|яя)?\s*привод|передн(?:ий|яя)?(?:\s|$))/i.test(msg)) {
+    update.drivetrain = "fwd";
+  } else if (/(?:задн(?:ий|яя)?\s*привод|задн(?:ий|яя)?(?:\s|$))/i.test(msg)) {
+    update.drivetrain = "rwd";
+  } else if (/(?:полн(?:ый|ая)?\s*привод|\bвд\b|4\s*(?:вд|wd)\b|\bawd\b)/i.test(msg)) {
+    update.drivetrain = "4wd";
+  }
+
+  // Steering
+  if (/(?:прав(?:ый|ая)?\s*руль|правый(?:\s|$))/i.test(msg) && !/привод/i.test(msg)) {
+    update.steering = "rhd";
+  } else if (/(?:лев(?:ый|ая)?\s*руль|левый(?:\s|$))/i.test(msg) && !/привод/i.test(msg)) {
+    update.steering = "lhd";
+  }
+
+  // Fuel type
+  if (/(?:без\s*гибрид)/i.test(msg)) {
+    update.fuelType = "gasoline";
+  } else if (/\b(?:гибрид)/i.test(msg)) {
+    update.fuelType = "hybrid";
+  }
+  if (/\b(?:бенз(?:ин)?)\b/i.test(msg)) {
+    update.fuelType = "gasoline";
+  }
+  if (/\b(?:дизель)\b/i.test(msg)) {
+    update.fuelType = "diesel";
+  }
+  if (/\b(?:электр(?:о|ичка)?|ev)\b/i.test(msg)) {
+    update.fuelType = "ev";
+  }
+
+  // Trim level
+  if (/(?:самый\s+простой|попроще|\bбаза\b|базов)/i.test(msg)) {
+    update.trimLevel = "base";
+  } else if (/(?:средн(?:яя|ий|ее)|средн(?:\s|$))/i.test(msg)) {
+    update.trimLevel = "mid";
+  } else if (/(?:максималк|максимальн|\bмакс\b|жирн)/i.test(msg)) {
+    update.trimLevel = "top";
+  }
+
+  // Priority
+  if (/(?:подешевле|главное\s+дешевле|попроще.*цен|бюджетн)/i.test(msg)) {
+    update.priority = "cheapest";
+  } else if (/(?:главное\s+живой|получше\s+состояни|хорош(?:ее|ий)\s+состояни)/i.test(msg)) {
+    update.priority = "best_condition";
+  } else if (/(?:что-то\s+среднее|нормальн(?:ый|ое)\s+баланс|золотая\s+середин)/i.test(msg)) {
+    update.priority = "balanced";
+  }
+
+  // Resale / legal entity
+  if (/(?:перепродаж|на\s+продажу|для\s+продажи)/i.test(msg)) {
+    update.isForResale = true;
+  }
+  if (/(?:юрлиц|юр\.\s*лиц|для\s+компании|ооо|ип\b)/i.test(msg)) {
+    update.isLegalEntity = true;
+  } else if (/(?:физлиц|физ\.\s*лиц|для\s+себя)/i.test(msg)) {
+    update.isLegalEntity = false;
+  }
+
+  // ── C) Auction grade parsing ──
+  // "оценка R тоже можно" / "R допустима" / "R можно"
+  const gradeAllowedMatch = msg.match(/(?:оценк[аи]?\s+)?(R|RA)\s+(?:тоже\s+)?(?:можно|допустим|подойд|пойд|годит)/i)
+    ?? msg.match(/\b(R|RA)\s+(?:можно|допустим)/i);
+  if (gradeAllowedMatch) {
+    update.auctionGradesAllowed = [gradeAllowedMatch[1].toUpperCase()];
+  }
+
+  // "не ниже 4" / "минимум 4.5" / "от 4"
+  const gradeMinMatch = msg.match(/(?:не\s+ниже|минимум|от)\s+([\d](?:\.[\d])?)/i);
+  if (gradeMinMatch) {
+    update.auctionGradeMin = gradeMinMatch[1];
+  }
+
+  // "хорошая оценка" / "с хорошей оценкой"
+  if (/(?:хорош(?:ая|ей|ую)\s+оценк)/i.test(msg) && !gradeMinMatch) {
+    update.auctionGradeMin = "4";
+  }
+
+  // Explicit standalone grades like "4.5", "3.5" as allowed grades (but not as years)
+  // Only match if preceded by "оценка" or similar context
+  const explicitGradeMatch = msg.match(/(?:оценк[аиу]?\s+)(S|[1-6](?:\.[05])?|R|RA)/i);
+  if (explicitGradeMatch && !gradeAllowedMatch) {
+    const grade = explicitGradeMatch[1].toUpperCase();
+    if (!update.auctionGradesAllowed) {
+      update.auctionGradesAllowed = [];
+    }
+    if (!update.auctionGradesAllowed.includes(grade)) {
+      update.auctionGradesAllowed.push(grade);
+    }
+  }
+
+  // ── D) Year parsing ──
+  // "2021", "21 год", "21й", "21-й"
+  const yearFullMatch = msg.match(/\b(20[12]\d)\s*(?:год|г\.?)?/i);
+  if (yearFullMatch) {
+    update.year = parseInt(yearFullMatch[1], 10);
+    update.yearText = yearFullMatch[0];
+  } else {
+    const yearShortMatch = msg.match(/\b(\d{2})\s*(?:-?й|й|-?го|год|г\.)/i);
+    if (yearShortMatch) {
+      const twoDigit = parseInt(yearShortMatch[1], 10);
+      // Normalize: 10-30 → 2010-2030 for modern JDM context
+      if (twoDigit >= 10 && twoDigit <= 35) {
+        update.year = 2000 + twoDigit;
+        update.yearText = yearShortMatch[0];
+      }
+    }
+  }
+
+  // ── E) Color parsing ──
+  for (const entry of COLOR_PATTERNS) {
+    if (entry.pattern.test(userMessage)) {
+      update.color = entry.color;
+      break;
+    }
+  }
+
+  // ── F) Intent parsing ──
+  if (/(?:посчитай|можешь\s+посчитать|расч[её]т|под\s+ключ\s+сколько|сколько\s+будет\s+стоить)/i.test(msg)) {
+    update.activeIntent = "price_calc";
+  } else if (/(?:что\s+значит|чем\s+(?:\d|R|RA)\S*\s+отличается|что\s+такое\s+(?:оценка|аукцион)|расскажи\s+про\s+оценк)/i.test(msg)) {
+    update.activeIntent = "auction_explanation";
+  } else if (
+    update.model || update.make || update.drivetrain || update.ageWindow ||
+    update.fuelType || update.trimLevel || update.year || update.color
+  ) {
+    update.activeIntent = "car_search";
+  }
+
+  // ── Budget parsing ──
+  const budgetMatch = msg.match(/(?:бюджет|до)\s+([\d.,]+\s*(?:тыс|тысяч|к|млн|миллион|\d)?[^\n,]*)/i);
+  if (budgetMatch) {
+    update.budgetText = budgetMatch[0];
+  }
+  const budgetMatch2 = msg.match(/(?:в\s+пределах)\s+([\d.,]+[^\n,]*)/i);
+  if (budgetMatch2) {
+    update.budgetText = budgetMatch2[0];
+  }
+
+  // ── Mileage parsing ──
+  const mileageMatch = msg.match(/(?:пробег\s+(?:до|не\s+более|максимум)\s+[\d.,]+\s*(?:тыс|к|км)?[^\n,]*)/i);
+  if (mileageMatch) {
+    update.mileageText = mileageMatch[0];
+  }
+
+  // ── Volume parsing ──
+  const volumeMatch = msg.match(/(?:объ[её]м(?:ом)?|двигатель|мотор)\s*(?:—|-)?\s*([\d.,]+)\s*(?:л(?:итр)?|куб|см3|cc)/i);
+  if (volumeMatch) {
+    const volStr = volumeMatch[1].replace(",", ".");
+    const volNum = parseFloat(volStr);
+    if (volNum > 0 && volNum < 10) {
+      // Likely liters, convert to cm3
+      update.volumeCm3 = Math.round(volNum * 1000);
+    } else if (volNum >= 100) {
+      update.volumeCm3 = Math.round(volNum);
+    }
+  }
+
+  // ── Auction price in JPY ──
+  const jpyMatch = msg.match(/([\d.,]+)\s*(?:тыс(?:яч)?\s+)?(?:йен|иен|¥|jpy)/i);
+  if (jpyMatch) {
+    const priceStr = jpyMatch[1].replace(/\s/g, "").replace(",", ".");
+    let price = parseFloat(priceStr);
+    if (/тыс/i.test(jpyMatch[0])) {
+      price *= 1000;
+    }
+    if (price > 0) {
+      update.auctionPriceJPY = Math.round(price);
+    }
+  }
+
+  if (clarifications.length > 0) {
+    update.needsClarification = clarifications;
+  }
+
+  return update;
+}
+
+// ── LLM fallback parser (secondary enrichment only) ──────
 const PARSER_SYSTEM_PROMPT = `You are a strict JSON extractor for a Russian car import business.
 Given a user message in Russian (possibly with slang), extract structured car-search filters.
 Return ONLY valid JSON matching this schema — no markdown, no code fences, no explanation:
@@ -443,13 +810,18 @@ FILTER RULES:
 If the message is not about cars at all, return activeIntent="other" with all other fields null/empty.
 Return ONLY the JSON object. No other text.`;
 
-async function parseUserIntent(
+async function extractStateUpdateWithLLM(
   userMessage: string,
-): Promise<ConversationState> {
+  previousState: ConversationState,
+): Promise<Partial<ConversationState>> {
   const apiKey = process.env.OPENROUTER_KEY;
-  if (!apiKey) return { ...DEFAULT_CONVERSATION_STATE };
+  if (!apiKey) return {};
 
   try {
+    const contextHint = previousState.model
+      ? `\nCurrent active car in conversation: ${previousState.make ?? ""} ${previousState.model}. If the user message is a short follow-up, preserve this model.`
+      : "";
+
     const response = await fetch(OPENROUTER_API_URL, {
       method: "POST",
       headers: {
@@ -461,7 +833,7 @@ async function parseUserIntent(
       body: JSON.stringify({
         model: MODEL,
         messages: [
-          { role: "system", content: PARSER_SYSTEM_PROMPT },
+          { role: "system", content: PARSER_SYSTEM_PROMPT + contextHint },
           { role: "user", content: userMessage },
         ],
         temperature: 0,
@@ -470,43 +842,53 @@ async function parseUserIntent(
     });
 
     if (!response.ok) {
-      console.error(`⚠️ Parser call failed: ${response.status} ${response.statusText}`);
-      return { ...DEFAULT_CONVERSATION_STATE };
+      console.error(`⚠️ LLM parser call failed: ${response.status} ${response.statusText}`);
+      return {};
     }
 
     const data: OpenRouterResponse = await response.json();
     const raw = data?.choices?.[0]?.message?.content;
     if (typeof raw !== "string" || raw.trim().length === 0) {
-      return { ...DEFAULT_CONVERSATION_STATE };
+      return {};
     }
 
     // Strip possible markdown code fences despite instructions
     const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
     const parsed = JSON.parse(cleaned) as Partial<ConversationState>;
+    const result: Partial<ConversationState> = {};
 
-    return {
-      activeIntent: parsed.activeIntent ?? "other",
-      model: parsed.model ?? null,
-      make: parsed.make ?? null,
-      generation: parsed.generation ?? null,
-      year: typeof parsed.year === "number" ? parsed.year : null,
-      color: parsed.color ?? null,
-      body: parsed.body ?? null,
-      ageWindow: parsed.ageWindow ?? null,
-      nonPassableType: parsed.nonPassableType ?? null,
-      drivetrain: parsed.drivetrain ?? null,
-      fuelType: parsed.fuelType ?? null,
-      trimLevel: parsed.trimLevel ?? null,
-      auctionGradeMin: parsed.auctionGradeMin ?? null,
-      auctionGradesAllowed: Array.isArray(parsed.auctionGradesAllowed) ? parsed.auctionGradesAllowed : [],
-      mileageText: parsed.mileageText ?? null,
-      budgetText: parsed.budgetText ?? null,
-      priority: parsed.priority ?? null,
-      needsClarification: Array.isArray(parsed.needsClarification) ? parsed.needsClarification : [],
-    };
+    // Only pick non-null fields from LLM response
+    if (parsed.activeIntent && parsed.activeIntent !== "other") result.activeIntent = parsed.activeIntent;
+    if (parsed.model) result.model = parsed.model;
+    if (parsed.make) result.make = parsed.make;
+    if (parsed.generation) result.generation = parsed.generation;
+    if (typeof parsed.year === "number") result.year = parsed.year;
+    if (parsed.color) result.color = parsed.color;
+    if (parsed.body) result.body = parsed.body;
+    if (parsed.ageWindow) result.ageWindow = parsed.ageWindow;
+    if (parsed.nonPassableType) result.nonPassableType = parsed.nonPassableType;
+    if (parsed.drivetrain) {
+      // Normalize awd → 4wd (LLM may return "awd" despite schema)
+      const dt = parsed.drivetrain as string;
+      result.drivetrain = dt === "awd" ? "4wd" : parsed.drivetrain;
+    }
+    if (parsed.fuelType) result.fuelType = parsed.fuelType;
+    if (parsed.trimLevel) result.trimLevel = parsed.trimLevel;
+    if (parsed.auctionGradeMin) result.auctionGradeMin = parsed.auctionGradeMin;
+    if (Array.isArray(parsed.auctionGradesAllowed) && parsed.auctionGradesAllowed.length > 0) {
+      result.auctionGradesAllowed = parsed.auctionGradesAllowed;
+    }
+    if (parsed.mileageText) result.mileageText = parsed.mileageText;
+    if (parsed.budgetText) result.budgetText = parsed.budgetText;
+    if (parsed.priority) result.priority = parsed.priority;
+    if (Array.isArray(parsed.needsClarification) && parsed.needsClarification.length > 0) {
+      result.needsClarification = parsed.needsClarification;
+    }
+
+    return result;
   } catch (err) {
-    console.error("⚠️ Parser error (falling back to default intent):", err);
-    return { ...DEFAULT_CONVERSATION_STATE };
+    console.error("⚠️ LLM parser error:", err);
+    return {};
   }
 }
 
@@ -843,19 +1225,37 @@ PARSED INTENT (структурированный разбор)
 • Короткие уточняющие сообщения клиента (цвет, привод, комплектация) — это дополнения к текущей модели, а НЕ новый запрос.
 `.trim();
 
-  // ── Parser-first: extract structured intent before replying ──
+  // ── Deterministic parser first, LLM fallback only when needed ──
   const mem = getMemory(chatId);
-  const currentParsed = await parseUserIntent(userMessage);
 
-  // If it's a short follow-up and current parse lost the model, treat as update
-  const isFollowUp = isFollowUpFilter(userMessage) && mem.parsedIntent.model != null;
-  const adjustedCurrent = isFollowUp && currentParsed.activeIntent === "other"
-    ? { ...currentParsed, activeIntent: mem.parsedIntent.activeIntent as ConversationState["activeIntent"] }
-    : currentParsed;
+  // Step 1: deterministic extraction (instant, no API call)
+  const deterministicUpdate = extractStateUpdate(userMessage, mem.state);
 
-  // Merge with persistent intent state
-  const effectiveIntent = mergeConversationState(mem.parsedIntent, adjustedCurrent);
-  mem.parsedIntent = effectiveIntent;
+  // Step 2: decide if LLM fallback is needed
+  // Use LLM only when deterministic parser found nothing meaningful AND message is not a simple follow-up
+  const hasSubstantiveUpdate = !!(
+    deterministicUpdate.model || deterministicUpdate.make ||
+    deterministicUpdate.drivetrain || deterministicUpdate.ageWindow ||
+    deterministicUpdate.fuelType || deterministicUpdate.trimLevel ||
+    deterministicUpdate.year || deterministicUpdate.color ||
+    deterministicUpdate.activeIntent || deterministicUpdate.auctionGradeMin ||
+    (deterministicUpdate.auctionGradesAllowed && deterministicUpdate.auctionGradesAllowed.length > 0) ||
+    deterministicUpdate.budgetText || deterministicUpdate.priority ||
+    deterministicUpdate.volumeCm3 || deterministicUpdate.auctionPriceJPY
+  );
+
+  let combinedUpdate: Partial<ConversationState> = deterministicUpdate;
+
+  if (!hasSubstantiveUpdate && !isFollowUpFilter(userMessage)) {
+    // Deterministic parser found nothing — try LLM as backup
+    const llmUpdate = await extractStateUpdateWithLLM(userMessage, mem.state);
+    // LLM enrichment: only add fields that deterministic parser missed
+    combinedUpdate = { ...llmUpdate, ...deterministicUpdate };
+  }
+
+  // Step 3: merge with persistent state
+  const effectiveIntent = mergeConversationState(mem.state, combinedUpdate);
+  mem.state = effectiveIntent;
 
   const recentMessages = mem.messages.filter(
     (m): m is { role: "user" | "assistant"; content: string } =>
