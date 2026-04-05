@@ -1122,8 +1122,8 @@ function applyStateUpdate(
   const currentIntent = current.activeIntent ?? "other";
   let effectiveIntent: ConversationState["activeIntent"];
   if (currentIntent === "other") {
-    // No explicit intent in this message — keep previous (or inherit from model context)
-    effectiveIntent = previous.model != null ? previous.activeIntent : previous.activeIntent;
+    // No explicit intent in this message — keep previous
+    effectiveIntent = previous.activeIntent;
   } else if (currentIntent === "car_search" && previous.activeIntent === "price_calc") {
     // Don't downgrade price_calc to car_search — user just added more filters
     effectiveIntent = "price_calc";
