@@ -17,6 +17,12 @@ import {
   type _test_ConversationState as ConversationState,
 } from "./bot.js";
 
+import {
+  extractSlangSignals,
+  normalizeAutoSlang,
+  type SellerClaim,
+} from "./slang.js";
+
 let passed = 0;
 let failed = 0;
 
@@ -602,6 +608,468 @@ console.log("\n═══ Slang: Complex combined phrases ═══");
   assertEqual(state.volumeCm3, 1500, "Complex: volumeCm3 = 1500 (полторашка)");
   assert(state.auctionGradesAllowed.includes("R"), "Complex: R grade allowed");
   assertEqual(state.budgetText, "approximate_guidance", "Complex: budgetText = approximate_guidance");
+}
+
+// ═══════════════════════════════════════════════════════════
+// EXPANDED SLANG REGRESSION TESTS (production-critical coverage)
+// ═══════════════════════════════════════════════════════════
+
+// ─── Drivetrain: expanded aliases ───
+console.log("\n═══ Expanded Slang: Drivetrain ═══");
+{
+  const testCases: Array<[string, string]> = [
+    ["вд", "4wd"],
+    ["4вд", "4wd"],
+    ["4wd", "4wd"],
+    ["4х4", "4wd"],
+    ["4x4", "4wd"],
+    ["полноприводная", "4wd"],
+    ["переднеприводная", "fwd"],
+    ["заднеприводная", "rwd"],
+  ];
+  for (const [input, expected] of testCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.drivetrain, expected, `Drivetrain: '${input}' → ${expected}`);
+  }
+}
+
+// ─── Transmission: expanded aliases ───
+console.log("\n═══ Expanded Slang: Transmission ═══");
+{
+  const testCases: Array<[string, string]> = [
+    ["на палке", "manual"],
+    ["палка", "manual"],
+    ["мкпп", "manual"],
+    ["дёргалка", "manual"],
+    ["ручная коробка", "manual"],
+    ["тяпка", "automatic"],
+    ["автомат", "automatic"],
+    ["акпп", "automatic"],
+    ["коробка-автомат", "automatic"],
+    ["робот", "automatic"],
+    ["ркпп", "automatic"],
+    ["варик", "cvt"],
+    ["вариатор", "cvt"],
+  ];
+  for (const [input, expected] of testCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.transmission, expected, `Transmission: '${input}' → ${expected}`);
+  }
+}
+
+// ─── Trim/Equipment: expanded aliases ───
+console.log("\n═══ Expanded Slang: Trim/Equipment ═══");
+{
+  // Base trim
+  const baseCases = [
+    "весла", "пустая комплектация", "деревянная", "голая", "лысая",
+    "бомжпакет", "минималка", "без наворотов",
+  ];
+  for (const input of baseCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.trimLevel, "base", `Trim base: '${input}' → base`);
+  }
+
+  // Top trim
+  const topCases = [
+    "фарш", "полный фарш", "жирная комплектация", "навороченная",
+    "упакованная", "люксовая", "топовая комплектация", "максималка",
+    "нафаршированная", "всё включено",
+  ];
+  for (const input of topCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.trimLevel, "top", `Trim top: '${input}' → top`);
+  }
+}
+
+// ─── Engine volume: expanded aliases ───
+console.log("\n═══ Expanded Slang: Engine Volume ═══");
+{
+  const testCases: Array<[string, number]> = [
+    ["полторашка", 1500],
+    ["двушка", 2000],
+    ["двалитра", 2000],
+    ["трешка", 3000],
+    ["литрушка", 1000],
+    ["1.5 л", 1500],
+    ["2.0 л", 2000],
+    ["3.0 л", 3000],
+    ["2.4 л", 2400],
+    ["2.5 л", 2500],
+    ["3.5 л", 3500],
+    ["4.0 л", 4000],
+  ];
+  for (const [input, expected] of testCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.volumeCm3, expected, `Volume: '${input}' → ${expected} cm³`);
+  }
+}
+
+// ─── Body type: expanded aliases ───
+console.log("\n═══ Expanded Slang: Body Type ═══");
+{
+  const testCases: Array<[string, string]> = [
+    ["сарай", "wagon"],
+    ["паркетник", "crossover"],
+    ["микрик", "minivan"],
+    ["лифтбек", "liftback"],
+    ["рамник", "suv"],
+    ["купарь", "coupe"],
+    ["кабрик", "cabrio"],
+    ["буханка", "van"],
+    ["каблук", "van"],
+    ["пикап", "pickup"],
+    ["хэтч", "hatchback"],
+    ["бочка", "sedan"],
+  ];
+  for (const [input, expected] of testCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.body, expected, `Body: '${input}' → ${expected}`);
+  }
+}
+
+// ─── Condition: expanded aliases ───
+console.log("\n═══ Expanded Slang: Condition ═══");
+{
+  const poorCases = [
+    "ведро", "корч", "дрова", "ушатанная", "убитая", "гнилая",
+    "помойка", "труп", "раздолбанная",
+  ];
+  for (const input of poorCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.condition, "poor", `Condition poor: '${input}' → poor`);
+  }
+
+  const decentCases = [
+    "живая", "живой вариант", "конфетка", "свежая",
+    "в идеале", "на ходу", "ухоженная",
+  ];
+  for (const input of decentCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.condition, "decent", `Condition decent: '${input}' → decent`);
+  }
+}
+
+// ─── Seller claims: expanded ───
+console.log("\n═══ Expanded Slang: Seller Claims ═══");
+{
+  // Claims that always trigger (no seller context needed)
+  const alwaysClaims: Array<[string, string]> = [
+    ["кузов в родне", "seller_claims_original_paint"],
+    ["родная краска", "seller_claims_original_paint"],
+    ["масло не жрёт", "seller_claims_no_oil_consumption"],
+    ["масло не ест", "seller_claims_no_oil_consumption"],
+    ["коробка не пинается", "seller_claims_transmission_ok"],
+    ["коробка без нареканий", "seller_claims_transmission_ok"],
+    ["работает как часы", "seller_claims_perfect_condition"],
+    ["как часики", "seller_claims_perfect_condition"],
+    ["не скручен", "seller_claims_original_mileage"],
+    ["пробег родной", "seller_claims_original_mileage"],
+    ["без подкрас", "seller_claims_no_repaint"],
+    ["не битая", "seller_claims_no_accident"],
+    ["без дтп", "seller_claims_no_accident"],
+    ["гаражное хранение", "seller_claims_garage_kept"],
+  ];
+  for (const [input, expectedMeaning] of alwaysClaims) {
+    const update = extractStateUpdate(`продавец говорит: ${input}`, { ...DEFAULT_CONVERSATION_STATE });
+    const found = (update.set.sellerClaims ?? []).some((c: SellerClaim) => c.meaning === expectedMeaning);
+    assert(found, `Seller claim: '${input}' → ${expectedMeaning}`);
+    // All must be soft_claim
+    for (const c of (update.set.sellerClaims ?? []) as SellerClaim[]) {
+      if (c.meaning === expectedMeaning) {
+        assertEqual(c.trust, "soft_claim", `Seller claim '${input}' trust = soft_claim`);
+      }
+    }
+  }
+}
+
+// ─── Reseller/market language ───
+console.log("\n═══ Expanded Slang: Reseller/Market Language ═══");
+{
+  const phrases = [
+    "перекуп",
+    "перепуки",
+    "покупан",
+    "торг у капота",
+    "торг при осмотре",
+    "барыга",
+  ];
+  for (const phrase of phrases) {
+    const signals = extractSlangSignals(phrase);
+    assertEqual(signals.resellerContext, true, `Reseller: '${phrase}' → resellerContext = true`);
+  }
+}
+
+// ─── Ownership: expanded ───
+console.log("\n═══ Expanded Slang: Ownership ═══");
+{
+  const personalCases = ["для себя", "себе ищу", "сам буду ездить"];
+  for (const input of personalCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.isForResale, false, `Ownership personal: '${input}' → isForResale = false`);
+    assertEqual(update.set.isLegalEntity, false, `Ownership personal: '${input}' → isLegalEntity = false`);
+  }
+
+  const resaleCases = ["под перепродажу", "на перепродажу", "для перекупа"];
+  for (const input of resaleCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.isForResale, true, `Ownership resale: '${input}' → isForResale = true`);
+  }
+
+  const legalCases = ["на фирму", "на юрлицо", "на ооо", "на ип", "для юрлица"];
+  for (const input of legalCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.isLegalEntity, true, `Ownership legal: '${input}' → isLegalEntity = true`);
+  }
+}
+
+// ─── Budget intent: expanded ───
+console.log("\n═══ Expanded Slang: Budget Intent ═══");
+{
+  const phrases = [
+    "дай вилку",
+    "засвети бюджет",
+    "цены в иенах не знаю",
+    "сколько стоит",
+    "сколько будет стоить",
+    "что по ценам",
+    "во что обойдётся",
+    "назови цену",
+    "прикинь бюджет",
+    "почём нынче",
+    "бюджет не знаю",
+    "не знаю бюджет",
+  ];
+  for (const phrase of phrases) {
+    const update = extractStateUpdate(phrase, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.budgetText, "approximate_guidance", `Budget: '${phrase}' → approximate_guidance`);
+  }
+}
+
+// ─── Negative flags: expanded ───
+console.log("\n═══ Expanded Slang: Negative Flags ═══");
+{
+  // Positive detection (car HAS these problems)
+  const flagCases: Array<[string, string]> = [
+    ["топляк", "flood_damage"],
+    ["утопленник", "flood_damage"],
+    ["перевертыш", "rollover_history"],
+    ["жучки", "rust_spots"],
+    ["цветёт", "rust_spots"],
+    ["масложор", "oil_leak"],
+    ["скрученный пробег", "odometer_tampered"],
+    ["двойник", "cloned_vin"],
+    ["в залоге", "lien_or_loan"],
+    ["в аресте", "seized"],
+    ["запрет рег", "registration_ban"],
+  ];
+  for (const [input, expected] of flagCases) {
+    const signals = extractSlangSignals(input);
+    assert(
+      (signals.negativeFlags ?? []).includes(expected),
+      `NegFlag: '${input}' → ${expected}`,
+    );
+  }
+
+  // Exclusion detection (user does NOT want these)
+  const excludeCases: Array<[string, string]> = [
+    ["не топляк", "flood_damage"],
+    ["не утопленник", "flood_damage"],
+    ["не перевертыш", "rollover_history"],
+    ["не распил", "cut_import"],
+    ["не конструктор", "constructor_import"],
+    ["не ведро", "poor_condition"],
+    ["не убитую", "poor_condition"],
+    ["не битая", "not_crashed"],
+    ["не кредитную", "lien_or_loan"],
+    ["без ограничений", "registration_clean"],
+    ["не скрученный", "odometer_not_tampered"],
+  ];
+  for (const [input, expected] of excludeCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assert(
+      (update.set.excludedNegativeFlags ?? []).includes(expected),
+      `ExclFlag: '${input}' → excluded ${expected}`,
+    );
+  }
+}
+
+// ─── Steering: expanded ───
+console.log("\n═══ Expanded Slang: Steering ═══");
+{
+  const testCases: Array<[string, string]> = [
+    ["праворукая", "rhd"],
+    ["правильная", "rhd"],
+    ["праворульная", "rhd"],
+    ["европеец", "lhd"],
+    ["леворульная", "lhd"],
+    ["европейка", "lhd"],
+  ];
+  for (const [input, expected] of testCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.steering, expected, `Steering: '${input}' → ${expected}`);
+  }
+}
+
+// ─── Color: expanded ───
+console.log("\n═══ Expanded Slang: Color ═══");
+{
+  const colorCases: Array<[string, string]> = [
+    ["снежка", "серебристый"],
+    ["серебрянка", "серебристый"],
+    ["бутылка", "тёмно-зелёный"],
+    ["мокрый асфальт", "тёмно-серый"],
+    ["баклажан", "тёмно-фиолетовый"],
+    ["вишня", "тёмно-красный"],
+    ["шампань", "бежевый"],
+  ];
+  for (const [input, expected] of colorCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.color, expected, `Color: '${input}' → ${expected}`);
+  }
+}
+
+// ─── Fuel: expanded ───
+console.log("\n═══ Expanded Slang: Fuel Type ═══");
+{
+  const testCases: Array<[string, string]> = [
+    ["саляра", "diesel"],
+    ["солярка", "diesel"],
+    ["дизелёк", "diesel"],
+    ["зажигалка", "gasoline"],
+    ["бензинка", "gasoline"],
+    ["атмосферник", "gasoline"],
+    ["гибра", "hybrid"],
+    ["гибридная", "hybrid"],
+    ["электричка", "ev"],
+    ["электромобиль", "ev"],
+  ];
+  for (const [input, expected] of testCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.fuelType, expected, `Fuel: '${input}' → ${expected}`);
+  }
+}
+
+// ─── Priority: expanded ───
+console.log("\n═══ Expanded Slang: Priority ═══");
+{
+  const cheapCases = ["подешевле", "дешман", "по низу рынка", "бюджетную", "самую дешёвую", "за копейки"];
+  for (const input of cheapCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.priority, "cheapest", `Priority cheap: '${input}' → cheapest`);
+  }
+
+  const condCases = ["не ведро", "не убитую", "получше состояние", "в хорошем состоянии"];
+  for (const input of condCases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.priority, "best_condition", `Priority condition: '${input}' → best_condition`);
+  }
+}
+
+// ─── No-Russia mileage: expanded ───
+console.log("\n═══ Expanded Slang: No-Russia Mileage ═══");
+{
+  const cases = ["беспробежная", "беспробежку", "б/п", "свежепригнанная", "без пробега по рф"];
+  for (const input of cases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.noRussiaMileage, true, `Mileage: '${input}' → noRussiaMileage = true`);
+  }
+}
+
+// ─── Turbo: expanded ───
+console.log("\n═══ Expanded Slang: Turbo ═══");
+{
+  const cases = ["турбовая", "турбо", "с наддувом", "турбированная"];
+  for (const input of cases) {
+    const update = extractStateUpdate(input, { ...DEFAULT_CONVERSATION_STATE });
+    assertEqual(update.set.turbo, true, `Turbo: '${input}' → turbo = true`);
+  }
+}
+
+// ─── normalizeAutoSlang output ───
+console.log("\n═══ Expanded Slang: normalizeAutoSlang text replacement ═══");
+{
+  const testCases: Array<[string, RegExp]> = [
+    ["передок", /передний привод/i],
+    ["задок", /задний привод/i],
+    ["вэдовая", /полный привод/i],
+    ["4вд", /полный привод/i],
+    ["4х4", /полный привод/i],
+    ["палка", /механика/i],
+    ["дёргалка", /механика/i],
+    ["тяпка", /автомат/i],
+    ["варик", /вариатор/i],
+    ["перепуки", /перекуп/i],
+    ["покупан", /покупатель/i],
+    ["барыга", /перекуп/i],
+    ["солярка", /дизель/i],
+    ["сарай", /универсал/i],
+    ["паркетник", /кроссовер/i],
+    ["козёл", /внедорожник/i],
+    ["купарь", /купе/i],
+    ["каблук", /фургон/i],
+    ["микрик", /минивэн/i],
+    ["литрушка", /1\.0 л/i],
+    ["трёшка", /3\.0 л/i],
+    ["четвёрка", /4\.0 л/i],
+    ["праворульная", /правый руль/i],
+    ["европейка", /левый руль/i],
+  ];
+  for (const [input, expected] of testCases) {
+    const result = normalizeAutoSlang(input);
+    assert(expected.test(result), `normalizeAutoSlang('${input}') → matches ${expected} (got: '${result}')`);
+  }
+}
+
+// ─── Complex real-world phrases ───
+console.log("\n═══ Expanded Slang: Complex Real-World Phrases ═══");
+{
+  // "ищу паркетник, двушку, на автомате, полноприводную, фарш, для себя, засвети бюджет"
+  const msg1 = "ищу паркетник, двушку, на автомате, полноприводную, фарш, для себя, засвети бюджет";
+  const update1 = extractStateUpdate(msg1, { ...DEFAULT_CONVERSATION_STATE });
+  const state1 = applyStateUpdate({ ...DEFAULT_CONVERSATION_STATE }, update1, "regex");
+  assertEqual(state1.body, "crossover", "Real1: body = crossover");
+  assertEqual(state1.volumeCm3, 2000, "Real1: volumeCm3 = 2000");
+  assertEqual(state1.transmission, "automatic", "Real1: transmission = automatic");
+  assertEqual(state1.drivetrain, "4wd", "Real1: drivetrain = 4wd");
+  assertEqual(state1.trimLevel, "top", "Real1: trimLevel = top");
+  assertEqual(state1.isForResale, false, "Real1: isForResale = false");
+  assertEqual(state1.budgetText, "approximate_guidance", "Real1: budgetText = approximate_guidance");
+
+  // "не ведро, не топляк, не битая, живую, беспробежку, на палке, сарай"
+  const msg2 = "не ведро, не топляк, не битая, живую, беспробежку, на палке, сарай";
+  const update2 = extractStateUpdate(msg2, { ...DEFAULT_CONVERSATION_STATE });
+  const state2 = applyStateUpdate({ ...DEFAULT_CONVERSATION_STATE }, update2, "regex");
+  assert(state2.excludedNegativeFlags.includes("poor_condition"), "Real2: excluded poor_condition");
+  assert(state2.excludedNegativeFlags.includes("flood_damage"), "Real2: excluded flood_damage");
+  assert(state2.excludedNegativeFlags.includes("not_crashed"), "Real2: excluded not_crashed");
+  assertEqual(state2.priority, "best_condition", "Real2: priority = best_condition (живую)");
+  assertEqual(state2.noRussiaMileage, true, "Real2: noRussiaMileage = true");
+  assertEqual(state2.transmission, "manual", "Real2: transmission = manual");
+  assertEqual(state2.body, "wagon", "Real2: body = wagon");
+
+  // "хочу недорого, 4вд, полторашку, на вариаторе, для перекупа, рамник"
+  const msg3 = "хочу недорого, 4вд, полторашку, на вариаторе, для перекупа, рамник";
+  const update3 = extractStateUpdate(msg3, { ...DEFAULT_CONVERSATION_STATE });
+  const state3 = applyStateUpdate({ ...DEFAULT_CONVERSATION_STATE }, update3, "regex");
+  assertEqual(state3.priority, "cheapest", "Real3: priority = cheapest");
+  assertEqual(state3.drivetrain, "4wd", "Real3: drivetrain = 4wd");
+  assertEqual(state3.volumeCm3, 1500, "Real3: volumeCm3 = 1500");
+  assertEqual(state3.transmission, "cvt", "Real3: transmission = cvt");
+  assertEqual(state3.isForResale, true, "Real3: isForResale = true");
+  assertEqual(state3.body, "suv", "Real3: body = suv (рамник)");
+
+  // "продавец говорит: не бита не крашена, пробег родной, гаражное хранение"
+  const msg4 = "продавец говорит: не бита не крашена, пробег родной, гаражное хранение";
+  const update4 = extractStateUpdate(msg4, { ...DEFAULT_CONVERSATION_STATE });
+  const claims = (update4.set.sellerClaims ?? []) as SellerClaim[];
+  const meanings = claims.map((c: SellerClaim) => c.meaning);
+  assert(meanings.includes("seller_claims_no_accident"), "Real4: claim no_accident");
+  assert(meanings.includes("seller_claims_original_mileage"), "Real4: claim original_mileage");
+  assert(meanings.includes("seller_claims_garage_kept"), "Real4: claim garage_kept");
+  for (const c of claims) {
+    assertEqual(c.trust, "soft_claim", `Real4: claim '${c.meaning}' trust = soft_claim`);
+  }
 }
 
 // ─── Summary ─────────────────────────────────────────────
