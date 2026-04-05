@@ -1746,7 +1746,9 @@ function extractStateUpdate(
 
   if (!update.budgetText && !update.nonPassableType && !update.ageWindow) {
     const budgetMatch = msg.match(/(?:бюджет|до)\s+([\d.,]+\s*(?:тыс|тысяч|к|млн|миллион|\d)?[^\n,]*)/i);
-    if (budgetMatch && !/(?:лет|год[ау]?(?![а-яе])|\d\s*-?\s*х(?:\s|$|[.,;!?]))/i.test(budgetMatch[0])) {
+    // Reject matches that contain age-related words: "лет", "год/года/году", or colloquial "-х" suffix (e.g. "до 3-х")
+    const AGE_SUFFIX_RE = /(?:лет|год[ау]?(?![а-яе])|\d\s*-?\s*х(?:\s|$|[.,;!?]))/i;
+    if (budgetMatch && !AGE_SUFFIX_RE.test(budgetMatch[0])) {
       update.budgetText = budgetMatch[0];
     }
   }
