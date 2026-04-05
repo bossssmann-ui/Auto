@@ -158,6 +158,7 @@ interface ConversationState {
   auctionGradesAllowed: string[];
 
   budgetText: string | null;
+  budgetDeclined: boolean;
   auctionPriceJPY: number | null;
   volumeCm3: number | null;
 
@@ -206,6 +207,7 @@ const DEFAULT_CONVERSATION_STATE: ConversationState = {
   auctionGradeMin: null,
   auctionGradesAllowed: [],
   budgetText: null,
+  budgetDeclined: false,
   auctionPriceJPY: null,
   volumeCm3: null,
   isForResale: null,
@@ -302,7 +304,7 @@ function computeNeedsClarification(state: ConversationState): string[] {
   }
 
   if (state.activeIntent === "price_calc") {
-    if (state.auctionPriceJPY == null && !state.budgetText) {
+    if (state.auctionPriceJPY == null && !state.budgetText && !state.budgetDeclined) {
       missing.push("priceOrBudget");
     }
     if (state.volumeCm3 == null) {
@@ -334,7 +336,7 @@ function deriveStage(state: ConversationState): ConversationStage {
     // ready_to_calculate ONLY if ALL required calc fields exist
     const hasModel = !!state.model;
     const hasPrice = state.auctionPriceJPY != null;
-    const hasBudgetGuidance = state.budgetText === "approximate_guidance";
+    const hasBudgetGuidance = state.budgetText === "approximate_guidance" || state.budgetDeclined;
     const hasVolume = state.volumeCm3 != null;
     const hasAge = state.year != null || state.ageWindow != null;
     const hasResale = state.isForResale != null;
@@ -371,14 +373,15 @@ function buildPendingQuestion(state: ConversationState): string | null {
   }
 
   if (state.stage === "collecting_calc_params") {
-    if (!state.auctionPriceJPY && !state.budgetText) {
-      return "Какой ориентир по бюджету или аукционной цене в йенах?";
-    }
-    if (!state.volumeCm3) {
-      return "Какой объём двигателя?";
+    // Priority order: model → year → volumeCm3 → isForResale → isLegalEntity → budget (last, skipped if declined)
+    if (!state.model) {
+      return "Какую модель рассматриваете?";
     }
     if (!state.year && !state.ageWindow) {
       return "Какой год выпуска (или проходной/непроходной)?";
+    }
+    if (!state.volumeCm3) {
+      return "Какой объём двигателя?";
     }
     if (state.isForResale == null && state.isLegalEntity == null) {
       return "Авто для себя (физлицо) или на юрлицо / для перепродажи?";
@@ -388,6 +391,9 @@ function buildPendingQuestion(state: ConversationState): string | null {
     }
     if (state.isLegalEntity == null) {
       return "Оформляете на физлицо или юрлицо?";
+    }
+    if (!state.auctionPriceJPY && !state.budgetText && !state.budgetDeclined) {
+      return "Какой ориентир по бюджету или аукционной цене в йенах?";
     }
     return null;
   }
@@ -405,7 +411,7 @@ function buildPendingQuestion(state: ConversationState): string | null {
       if (!state.ageWindow && !state.year) {
         return "Какой возраст интересует — проходной (3–5 лет) или другой?";
       }
-      if (!state.budgetText) {
+      if (!state.budgetText && !state.budgetDeclined) {
         return "Какой ориентир по бюджету?";
       }
       return null;
@@ -632,9 +638,6 @@ function planReply(state: ConversationState, _userMessage: string): string[] {
     if (state.ageWindow === "non_passable" && state.nonPassableType == null) {
       missingCritical.push("непроходной: свежий (до 3 лет) или старый (старше 5 лет)");
     }
-    if (state.auctionPriceJPY == null && !state.budgetText) {
-      missingCritical.push("бюджет или аукционная цена в йенах");
-    }
     if (state.volumeCm3 == null) {
       missingCritical.push("объём двигателя");
     }
@@ -647,6 +650,10 @@ function planReply(state: ConversationState, _userMessage: string): string[] {
     if (state.isLegalEntity == null) {
       missingCritical.push("физлицо или юрлицо");
     }
+    // Budget is LAST priority and skipped if budgetDeclined
+    if (state.auctionPriceJPY == null && !state.budgetText && !state.budgetDeclined) {
+      missingCritical.push("бюджет или аукционная цена в йенах");
+    }
   } else if (state.activeIntent === "car_search") {
     if (!state.model && !state.make) {
       missingCritical.push("модель или марка");
@@ -654,7 +661,7 @@ function planReply(state: ConversationState, _userMessage: string): string[] {
     if (state.year == null && state.ageWindow == null) {
       missingCritical.push("возрастное окно или год");
     }
-    if (!state.budgetText) {
+    if (!state.budgetText && !state.budgetDeclined) {
       missingCritical.push("бюджет");
     }
   }
@@ -854,7 +861,7 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
 
   // ── Build missing calc-critical fields ──
   const missingQuestions: string[] = [];
-  const isBudgetGuidanceMode = state.budgetText === "approximate_guidance";
+  const isBudgetGuidanceMode = state.budgetText === "approximate_guidance" || state.budgetDeclined;
 
   if (state.activeIntent === "price_calc") {
     if (state.ageWindow === "non_passable" && !state.nonPassableType) {
@@ -862,9 +869,6 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
     }
     if (!state.year && !state.ageWindow) {
       missingQuestions.push("какой год или возрастная категория");
-    }
-    if (!state.auctionPriceJPY && !state.budgetText) {
-      missingQuestions.push("какой бюджет или цена покупки в йенах");
     }
     if (!state.volumeCm3) {
       missingQuestions.push("какой объём двигателя");
@@ -875,6 +879,10 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
       if (state.isForResale == null) missingQuestions.push("для перепродажи или для себя");
       if (state.isLegalEntity == null) missingQuestions.push("физлицо или юрлицо");
     }
+    // Budget is LAST priority and skipped if budgetDeclined
+    if (!state.auctionPriceJPY && !state.budgetText && !state.budgetDeclined) {
+      missingQuestions.push("какой бюджет или цена покупки в йенах");
+    }
   } else if (state.activeIntent === "car_search") {
     if (!state.model && !state.make) {
       missingQuestions.push("какая модель или марка");
@@ -882,7 +890,7 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
     if (!state.year && !state.ageWindow) {
       missingQuestions.push("какой возраст или год");
     }
-    if (!state.budgetText) {
+    if (!state.budgetText && !state.budgetDeclined) {
       missingQuestions.push("какой бюджет");
     }
   }
@@ -1165,6 +1173,7 @@ function applyStateUpdate(
     auctionGradeMin: pick(base.auctionGradeMin, current.auctionGradeMin),
     auctionGradesAllowed: mergeArrays(base.auctionGradesAllowed, current.auctionGradesAllowed),
     budgetText: pick(base.budgetText, current.budgetText),
+    budgetDeclined: current.budgetDeclined || base.budgetDeclined,
     auctionPriceJPY: pick(base.auctionPriceJPY, current.auctionPriceJPY),
     volumeCm3: pick(base.volumeCm3, current.volumeCm3),
     isForResale: pick(base.isForResale, current.isForResale),
@@ -1715,9 +1724,10 @@ function extractStateUpdate(
 
   // ── Budget parsing ──
   // Detect "don't know the budget" / "show me approximate prices" FIRST
-  const BUDGET_UNKNOWN_RE = /(?:бюджет\s+не\s*знаю|не\s+знаю\s+бюджет|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост)|жду\s+от\s+(?:тебя|вас)\s+цен|дай\s+ценообразовани|дай\s+цен(?:у|ы|ник)|покажи\s+цен|скажи\s+цен)/i;
+  const BUDGET_UNKNOWN_RE = /(?:бюджет\s+не\s*знаю|не\s+знаю\s+бюджет|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост)|жду\s+от\s+(?:тебя|вас)\s+цен|дай\s+ценообразовани|дай\s+цен(?:у|ы|ник)|покажи\s+цен|скажи\s+цен|сколько\s+стоит|не\s+знаю\s+цену)/i;
   if (BUDGET_UNKNOWN_RE.test(msg)) {
     update.budgetText = "approximate_guidance";
+    update.budgetDeclined = true;
   }
 
   if (!update.budgetText) {
@@ -1830,6 +1840,7 @@ Return ONLY valid JSON matching this schema — no markdown, no code fences, no 
   "auctionGradesAllowed": string[],
   "mileageText": string | null,
   "budgetText": string | null,
+  "budgetDeclined": boolean,
   "priority": "cheapest" | "best_condition" | "balanced" | null,
   "volumeCm3": number | null,
   "auctionPriceJPY": number | null,
@@ -1883,6 +1894,9 @@ CALC-CRITICAL FIELDS:
 - "для себя" / "не для перепродажи" → isForResale=false
 - "юрлицо" / "ООО" / "ИП" → isLegalEntity=true
 - "физлицо" / "для себя" → isLegalEntity=false
+
+BUDGET DECLINED RULE:
+- If the user says they don't know the budget, asks for pricing, or requests approximate costs (e.g. "не знаю бюджет", "жду от тебя цену", "сколько стоит", "дай ценообразование", "не знаю цену", "сориентируй по цене") → set budgetDeclined=true and budgetText=null.
 
 If the message is not about cars at all, return activeIntent="other" with all other fields null/empty.
 Return ONLY the JSON object. No other text.`;
@@ -1968,6 +1982,7 @@ async function extractStateUpdateWithLLM(
     }
     if (parsed.mileageText) result.mileageText = parsed.mileageText;
     if (parsed.budgetText) result.budgetText = parsed.budgetText;
+    if (parsed.budgetDeclined) result.budgetDeclined = true;
     if (parsed.priority) result.priority = parsed.priority;
     // Calc-critical fields
     if (typeof parsed.volumeCm3 === "number" && parsed.volumeCm3 > 0) {
@@ -2434,13 +2449,14 @@ PARSED INTENT (структурированный разбор)
   // Stage-specific instructions with clear known/missing breakdown
   if (mergedState.stage === "collecting_calc_params") {
     const missing: string[] = [];
-    if (!mergedState.auctionPriceJPY && !mergedState.budgetText) missing.push("бюджет или аукционная цена в йенах");
     if (!mergedState.volumeCm3) missing.push("объём двигателя");
     if (!mergedState.year && !mergedState.ageWindow) missing.push("год или возрастное окно");
     if (mergedState.ageWindow === "non_passable" && !mergedState.nonPassableType) missing.push("уточнить непроходной: свежий (до 3 лет) или старый (5+ лет)");
     if (mergedState.isForResale == null && mergedState.isLegalEntity == null) missing.push("для себя (физлицо) или юрлицо/перепродажа");
     else if (mergedState.isForResale == null) missing.push("для перепродажи или для себя");
     else if (mergedState.isLegalEntity == null) missing.push("физлицо или юрлицо");
+    // Budget is LAST priority and skipped if budgetDeclined
+    if (!mergedState.auctionPriceJPY && !mergedState.budgetText && !mergedState.budgetDeclined) missing.push("бюджет или аукционная цена в йенах");
 
     stateContextParts.push(
       `\n═══ ИНСТРУКЦИЯ ═══`,
@@ -2484,7 +2500,7 @@ PARSED INTENT (структурированный разбор)
   // Use buildCalcParamsFromState directly instead of relying on LLM making the correct tool call
   let autoCalcDone = false;
   if (mergedState.stage === "ready_to_calculate") {
-    const isRangeMode = mergedState.budgetText === "approximate_guidance" && mergedState.auctionPriceJPY == null;
+    const isRangeMode = (mergedState.budgetText === "approximate_guidance" || mergedState.budgetDeclined) && mergedState.auctionPriceJPY == null;
 
     if (isRangeMode) {
       // Range calculation: user doesn't know budget — calculate with market price range
