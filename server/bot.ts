@@ -634,23 +634,29 @@ function planReply(state: ConversationState, _userMessage: string): string[] {
   const missingCritical: string[] = [];
 
   if (state.activeIntent === "price_calc") {
-    // nonPassableType first — blocks age computation and is quick to answer
+    // Priority 1: nonPassableType — blocks age computation and is quick to answer
     if (state.ageWindow === "non_passable" && state.nonPassableType == null) {
       missingCritical.push("непроходной: свежий (до 3 лет) или старый (старше 5 лет)");
-    }
-    if (state.volumeCm3 == null) {
-      missingCritical.push("объём двигателя");
     }
     if (state.year == null && state.ageWindow == null) {
       missingCritical.push("год выпуска или возрастное окно");
     }
+    // Priority 2: volumeCm3
+    if (state.volumeCm3 == null) {
+      missingCritical.push("объём двигателя");
+    }
+    // Priority 3: drivetrain
+    if (state.drivetrain == null) {
+      missingCritical.push("какой привод — передний, задний или полный");
+    }
+    // Priority 4: isForResale / isLegalEntity
     if (state.isForResale == null) {
       missingCritical.push("для перепродажи или нет");
     }
     if (state.isLegalEntity == null) {
       missingCritical.push("физлицо или юрлицо");
     }
-    // Budget is LAST priority and skipped if budgetDeclined
+    // Priority 5: budget — LAST and skipped if budgetDeclined
     if (state.auctionPriceJPY == null && !state.budgetText && !state.budgetDeclined) {
       missingCritical.push("бюджет или аукционная цена в йенах");
     }
@@ -864,22 +870,29 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
   const isBudgetGuidanceMode = state.budgetText === "approximate_guidance" || state.budgetDeclined;
 
   if (state.activeIntent === "price_calc") {
+    // Priority 1: nonPassableType
     if (state.ageWindow === "non_passable" && !state.nonPassableType) {
       missingQuestions.push("нужен вариант до 3 лет или старше 5 лет");
     }
     if (!state.year && !state.ageWindow) {
       missingQuestions.push("какой год или возрастная категория");
     }
+    // Priority 2: volumeCm3
     if (!state.volumeCm3) {
       missingQuestions.push("какой объём двигателя");
     }
+    // Priority 3: drivetrain
+    if (!state.drivetrain) {
+      missingQuestions.push("какой привод — передний, задний или полный");
+    }
+    // Priority 4: isForResale / isLegalEntity
     if (state.isForResale == null && state.isLegalEntity == null) {
       missingQuestions.push("оформление на физлицо, юрлицо или под перепродажу");
     } else {
       if (state.isForResale == null) missingQuestions.push("для перепродажи или для себя");
       if (state.isLegalEntity == null) missingQuestions.push("физлицо или юрлицо");
     }
-    // Budget is LAST priority and skipped if budgetDeclined
+    // Priority 5: budget — LAST and skipped if budgetDeclined
     if (!state.auctionPriceJPY && !state.budgetText && !state.budgetDeclined) {
       missingQuestions.push("какой бюджет или цена покупки в йенах");
     }
@@ -1486,6 +1499,7 @@ function extractStateUpdate(
   }
   if (slangSignals.budgetGuidance) {
     update.budgetText = "approximate_guidance";
+    update.budgetDeclined = true;
   }
   if (sellerClaims.length > 0) {
     update.sellerClaims = sellerClaims;
@@ -1551,9 +1565,9 @@ function extractStateUpdate(
   // Age window
   if (/(?:не\s*проходн|непроходн)/i.test(msg)) {
     update.ageWindow = "non_passable";
-    if (/(?:свеж|до\s*(?:3|тр[её]х)|младше\s*(?:3|тр[её]х)|менее\s*(?:3|тр[её]х)|молод)/i.test(msg)) {
+    if (/(?:свеж|до\s*(?:3|тр[её]х)|младше\s*(?:3|тр[её]х)|менее\s*(?:3|тр[её]х)|не\s*старше\s*(?:3|тр[её]х)|молод)/i.test(msg)) {
       update.nonPassableType = "under_3_years";
-    } else if (/(?:стар|(?:от|старше|свыше|более|больше)\s*(?:5|пяти))/i.test(msg)) {
+    } else if (/(?:стар(?:ый)?\s*фонд|стар|(?:от|старше|свыше|более|больше)\s*(?:5|пяти))/i.test(msg)) {
       update.nonPassableType = "over_5_years";
     } else if (!previousState.nonPassableType) {
       // nonPassableType will be detected by computeNeedsClarification
@@ -1564,9 +1578,9 @@ function extractStateUpdate(
 
   // Context-aware: standalone "свежий"/"старше"/"до 3 лет" when nonPassableType is pending clarification
   if (previousState.ageWindow === "non_passable" && !previousState.nonPassableType && !update.nonPassableType && !update.ageWindow) {
-    if (/(?:свеж|до\s*(?:3\s*(?:-?\s*х)?|тр[её]х)|менее\s*(?:3|тр[её]х)|младше\s*(?:3|тр[её]х)|молод)/i.test(msg)) {
+    if (/(?:свеж|до\s*(?:3\s*(?:-?\s*х)?|тр[её]х)|менее\s*(?:3|тр[её]х)|младше\s*(?:3|тр[её]х)|не\s*старше\s*(?:3|тр[её]х)|молод)/i.test(msg)) {
       update.nonPassableType = "under_3_years";
-    } else if (/(?:стар|больше\s*(?:5|пяти)|более\s*(?:5|пяти)|старше\s*(?:5|пяти)|свыше\s*(?:5|пяти)|от\s*(?:5|пяти)|5\s*\+)/i.test(msg)) {
+    } else if (/(?:стар(?:ый)?\s*фонд|стар|больше\s*(?:5|пяти)|более\s*(?:5|пяти)|старше\s*(?:5|пяти)|свыше\s*(?:5|пяти)|от\s*(?:5|пяти)|5\s*\+)/i.test(msg)) {
       update.nonPassableType = "over_5_years";
     }
   }
@@ -1574,10 +1588,10 @@ function extractStateUpdate(
   // Standalone nonPassableType detection (even without "непроходной" in this message):
   // When the user says "до 3 лет" or "от 5 лет" alone, infer both ageWindow + nonPassableType
   if (!update.ageWindow && !update.nonPassableType && !previousState.nonPassableType) {
-    if (/(?:до\s*(?:3\s*(?:-?\s*х)?|тр[её]х)\s*лет|младше\s*(?:3|тр[её]х)(?:\s*лет)?)/i.test(msg)) {
+    if (/(?:до\s*(?:3\s*(?:-?\s*х)?|тр[её]х)\s*лет|младше\s*(?:3|тр[её]х)(?:\s*лет)?|не\s*старше\s*(?:3|тр[её]х)(?:\s*лет)?|свежи[йея])/i.test(msg)) {
       update.ageWindow = "non_passable";
       update.nonPassableType = "under_3_years";
-    } else if (/(?:(?:от|старше|свыше|более|больше)\s*(?:5|пяти)\s*(?:-?\s*и)?\s*лет|5\s*\+\s*лет|старше\s*(?:5|пяти))/i.test(msg)) {
+    } else if (/(?:(?:от|старше|свыше|более|больше)\s*(?:5|пяти)\s*(?:-?\s*и)?\s*лет|5\s*\+\s*лет|старше\s*(?:5|пяти)|стар(?:ый)?\s*фонд)/i.test(msg)) {
       update.ageWindow = "non_passable";
       update.nonPassableType = "over_5_years";
     }
@@ -1724,7 +1738,7 @@ function extractStateUpdate(
 
   // ── Budget parsing ──
   // Detect "don't know the budget" / "show me approximate prices" FIRST
-  const BUDGET_UNKNOWN_RE = /(?:бюджет\s+не\s*знаю|не\s+знаю\s+бюджет|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост)|жду\s+от\s+(?:тебя|вас)\s+цен|дай\s+ценообразовани|дай\s+цен(?:у|ы|ник)|покажи\s+цен|скажи\s+цен|сколько\s+стоит|не\s+знаю\s+цену)/i;
+  const BUDGET_UNKNOWN_RE = /(?:бюджет[а-яё]*\s+не\s*знаю|не\s+знаю\s+бюджет[а-яё]*|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост)|жду\s+от\s+(?:тебя|вас)\s+цен|дай\s+ценообразовани|дай\s+цен(?:у|ы|ник)|покажи\s+цен|скажи\s+цен|сколько\s+стоит|не\s+знаю\s+цену|предлагай)/i;
   if (BUDGET_UNKNOWN_RE.test(msg)) {
     update.budgetText = "approximate_guidance";
     update.budgetDeclined = true;
