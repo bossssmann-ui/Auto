@@ -54,11 +54,11 @@ const tools = [{
   type: "function" as const,
   function: {
     name: "calculate_vehicle_price",
-    description: "Рассчитать стоимость авто из Японии. Возвращает цены в рублях.",
+    description: "Рассчитать стоимость импортного авто. Возвращает цены в рублях.",
     parameters: {
       type: "object",
       properties: {
-        vehicleType: { type: "string", enum: ["car", "jeep", "moto", "special", "sanctioned"] },
+        vehicleType: { type: "string", enum: ["car", "jeep", "moto", "special", "special_vehicle"] },
         priceJPY: { type: "number" },
         volumeCm3: { type: "number" },
         ageYears: { type: "number" },
@@ -521,7 +521,7 @@ function buildCalcParamsFromState(state: ConversationState): CalcParams | null {
   // Determine vehicle type
   let vehicleType: CalcParams["vehicleType"] = "car";
   if (state.volumeCm3 > 1900) {
-    vehicleType = "sanctioned";
+    vehicleType = "special_vehicle";
   }
 
   return {
@@ -1155,7 +1155,7 @@ async function summarizeMemory(
       ? `Existing summary:\n${previousSummary}\n\nNew messages:\n${transcript}`
       : `Messages:\n${transcript}`,
     "",
-    "Compress this conversation into a short factual memory for a Japanese car import sales assistant.",
+    "Compress this conversation into a short factual memory for a vehicle import sales assistant.",
     "Keep only durable facts:",
     "- requested car models and nicknames",
     "- budget",
@@ -1733,8 +1733,8 @@ function extractStateUpdate(
 }
 
 // ── LLM fallback parser (secondary enrichment only) ──────
-const PARSER_SYSTEM_PROMPT = `You are a strict JSON extractor for a Russian car import business.
-Given a user message in Russian (possibly with slang), extract structured car-search filters.
+const PARSER_SYSTEM_PROMPT = `You are a strict JSON extractor for a car import business.
+Given a user message (possibly with slang), extract structured car-search filters.
 Return ONLY valid JSON matching this schema — no markdown, no code fences, no explanation:
 
 {
@@ -1795,7 +1795,7 @@ FILTER RULES:
 - "главное дешевле" / "подешевле" / "попроще" → priority="cheapest"
 - "оценка R тоже можно" / "R допустима" → add "R" to auctionGradesAllowed
 - "посчитай" / "посчитать" / "можешь посчитать" → activeIntent="price_calc"
-- "белый" / "чёрный" / "серебристый" etc. → color (in Russian, as the client said it)
+- "белый" / "чёрный" / "серебристый" etc. → color (as the client said it)
 - "2023" / "2024 год" → year (numeric, e.g. 2023)
 - "не больше 4.5" / "минимум 4" → auctionGradeMin (e.g. "4.5", "4")
 - "до 100 тысяч пробег" / "пробег до 80к" → mileageText (as free text, e.g. "до 100 тыс. км")
@@ -1920,7 +1920,7 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 
   const LOCAL_SYSTEM_PROMPT = `
 Ты — Алексей, старший менеджер компании «СпецТехМаш» (Находка / Владивосток).
-Специализация — импорт авто, мото и спецтехники из Японии, Кореи и Китая.
+Специализация — импорт авто, мото и спецтехники из Азии.
 Наши козыри: своя ТЛК «Тихоокеанская Звезда», полный контроль логистики и возврат НДС до 22 % для юрлиц.
 
 ════════════════════════════════════════════
@@ -1971,7 +1971,7 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 
 Если клиент уже указал модель + ≥2 фильтра:
   • Задавай НЕ БОЛЕЕ 1–2 коротких вопросов по самым важным пробелам (бюджет, год, свежий/старый непроходной).
-  • НЕ спрашивай: какой тип кузова, какой бренд, SUV или кроссовер, Япония/Корея/Китай — если модель уже делает это очевидным.
+  • НЕ спрашивай: какой тип кузова, какой бренд, SUV или кроссовер, страну происхождения — если модель уже делает это очевидным.
 
 Если информации совсем мало (нет модели и фильтров менее 2) — тогда да, задавай уточняющие вопросы, но кратко и по делу.
 
@@ -2048,7 +2048,7 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 • «правый» = правый руль (RHD).
 • «левый» = левый руль (LHD).
 • «аукционник» = аукционный лист.
-• «санкционка» = санкционный автомобиль (объём > 1.9 л и др. ограничения).
+• «санкционка» = автомобиль с нестандартной логистикой (объём > 1.9 л и др. ограничения).
 • «конструктор» = ввоз с разборкой и сборкой на месте.
 • «распил» = ввоз распиленного кузова.
 • «бенз» = бензиновый двигатель.
@@ -2129,7 +2129,7 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 РУЛЬ
 ════════════════════════════════════════════
 
-Япония без уточнения руля = правый руль (JDM). Не переспрашивай.
+Азиатский рынок без уточнения руля = правый руль (JDM). Не переспрашивай.
 
 ════════════════════════════════════════════
 ЗОНА УВЕРЕННОСТИ
@@ -2174,10 +2174,10 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 Упоминай площадку только когда это важно для вопроса. 2–3 фразы по делу.
 
 ════════════════════════════════════════════
-САНКЦИОННЫЕ И СПЕЦТЕХНИКА
+СПЕЦКАТЕГОРИЯ И СПЕЦТЕХНИКА
 ════════════════════════════════════════════
 
-Авто санкционное (>1.9 л) или спецтехника: не считай цену, скажи что логистика нестандартная, собери параметры, передай оператору.
+Авто спецкатегории (>1.9 л) или спецтехника: не считай цену, скажи что логистика нестандартная, собери параметры, передай оператору.
 
 ════════════════════════════════════════════
 РАСЧЁТ ОБЫЧНОЙ МАШИНЫ
