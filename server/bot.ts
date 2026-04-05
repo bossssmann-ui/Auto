@@ -1744,9 +1744,9 @@ function extractStateUpdate(
     update.budgetDeclined = true;
   }
 
-  if (!update.budgetText) {
+  if (!update.budgetText && !update.nonPassableType && !update.ageWindow) {
     const budgetMatch = msg.match(/(?:бюджет|до)\s+([\d.,]+\s*(?:тыс|тысяч|к|млн|миллион|\d)?[^\n,]*)/i);
-    if (budgetMatch && !/лет/i.test(budgetMatch[0])) {
+    if (budgetMatch && !/(?:лет|год[ау]?(?![а-яе])|\d\s*-?\s*х(?:\s|$|[.,;!?]))/i.test(budgetMatch[0])) {
       update.budgetText = budgetMatch[0];
     }
   }
@@ -1913,6 +1913,12 @@ CALC-CRITICAL FIELDS:
 
 BUDGET DECLINED RULE:
 - If the user says they don't know the budget, asks for pricing, or requests approximate costs (e.g. "не знаю бюджет", "жду от тебя цену", "сколько стоит", "дай ценообразование", "не знаю цену", "сориентируй по цене") → set budgetDeclined=true and budgetText="approximate_guidance".
+
+⚠️ AGE vs BUDGET DISAMBIGUATION:
+- "до 3 лет", "до трёх лет", "младше трёх", "до 3-х" → ageWindow="non_passable", nonPassableType="under_3_years". This is NEVER budgetText.
+- "до 5 лет", "до пяти лет" → ageWindow="non_passable", nonPassableType="over_5_years". This is NEVER budgetText.
+- "до X тысяч", "до X млн", "бюджет X" → budgetText (budget amount). This is NEVER about age.
+- When in doubt: if the number is small (3, 5) and context is about vehicle age/customs — it is age, NOT budget.
 
 If the message is not about cars at all, return activeIntent="other" with all other fields null/empty.
 Return ONLY the JSON object. No other text.`;
