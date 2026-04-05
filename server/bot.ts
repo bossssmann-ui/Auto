@@ -1551,9 +1551,9 @@ function extractStateUpdate(
   // Age window
   if (/(?:не\s*проходн|непроходн)/i.test(msg)) {
     update.ageWindow = "non_passable";
-    if (/свеж/i.test(msg)) {
+    if (/(?:свеж|до\s*(?:3|тр[её]х)|младше\s*(?:3|тр[её]х)|менее\s*(?:3|тр[её]х)|молод)/i.test(msg)) {
       update.nonPassableType = "under_3_years";
-    } else if (/стар/i.test(msg)) {
+    } else if (/(?:стар|(?:от|старше|свыше|более|больше)\s*(?:5|пяти))/i.test(msg)) {
       update.nonPassableType = "over_5_years";
     } else if (!previousState.nonPassableType) {
       // nonPassableType will be detected by computeNeedsClarification
@@ -1564,9 +1564,9 @@ function extractStateUpdate(
 
   // Context-aware: standalone "свежий"/"старше"/"до 3 лет" when nonPassableType is pending clarification
   if (previousState.ageWindow === "non_passable" && !previousState.nonPassableType && !update.nonPassableType && !update.ageWindow) {
-    if (/(?:свеж|до\s*3\s*(?:-?\s*х)?|менее\s*3|младше\s*3|молод)/i.test(msg)) {
+    if (/(?:свеж|до\s*(?:3\s*(?:-?\s*х)?|тр[её]х)|менее\s*(?:3|тр[её]х)|младше\s*(?:3|тр[её]х)|молод)/i.test(msg)) {
       update.nonPassableType = "under_3_years";
-    } else if (/(?:стар|больше\s*5|более\s*5|старше\s*5|свыше\s*5|от\s*5|5\s*\+)/i.test(msg)) {
+    } else if (/(?:стар|больше\s*(?:5|пяти)|более\s*(?:5|пяти)|старше\s*(?:5|пяти)|свыше\s*(?:5|пяти)|от\s*(?:5|пяти)|5\s*\+)/i.test(msg)) {
       update.nonPassableType = "over_5_years";
     }
   }
@@ -1574,10 +1574,10 @@ function extractStateUpdate(
   // Standalone nonPassableType detection (even without "непроходной" in this message):
   // When the user says "до 3 лет" or "от 5 лет" alone, infer both ageWindow + nonPassableType
   if (!update.ageWindow && !update.nonPassableType && !previousState.nonPassableType) {
-    if (/(?:до\s*3\s*(?:-?\s*х)?\s*лет)/i.test(msg)) {
+    if (/(?:до\s*(?:3\s*(?:-?\s*х)?|тр[её]х)\s*лет|младше\s*(?:3|тр[её]х)(?:\s*лет)?)/i.test(msg)) {
       update.ageWindow = "non_passable";
       update.nonPassableType = "under_3_years";
-    } else if (/(?:(?:от|старше|свыше|более|больше)\s*5\s*(?:-?\s*и)?\s*лет|5\s*\+\s*лет)/i.test(msg)) {
+    } else if (/(?:(?:от|старше|свыше|более|больше)\s*(?:5|пяти)\s*(?:-?\s*и)?\s*лет|5\s*\+\s*лет|старше\s*(?:5|пяти))/i.test(msg)) {
       update.ageWindow = "non_passable";
       update.nonPassableType = "over_5_years";
     }
@@ -1873,6 +1873,8 @@ AGE RULES:
 - If non_passable and context says "свежий" or implies new → nonPassableType="under_3_years"
 - If non_passable and context says "старый" or implies old → nonPassableType="over_5_years"
 - If ambiguous which non_passable → nonPassableType=null
+- "до трёх лет" / "до 3 лет" / "младше трёх" / "младше 3" → ageWindow="non_passable", nonPassableType="under_3_years"
+- "старше пяти" / "старше 5" / "от 5 лет" / "от пяти лет" → ageWindow="non_passable", nonPassableType="over_5_years"
 
 FILTER RULES:
 - "передний привод" / "передний" → drivetrain="fwd"
