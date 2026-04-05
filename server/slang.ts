@@ -65,6 +65,7 @@ const transmissionAliases: Array<{ pattern: RegExp; value: "manual" | "automatic
   { pattern: cyrb(/\b(?:на\s+палке|палка|кочерга|мешалка|мотыга|ручка|коробчатый|мкпп|мт|механика|механическ[а-яё]*|ручная\s+коробка|на\s+ручке|д[её]ргалка|весло(?:вая)?|мешал[а-яё]*)\b/i), value: "manual" },
   { pattern: cyrb(/\b(?:автомат[а-яё]*|тяпка|акпп|ат|коробка[\s-]автомат|гидро(?:автомат|мат)?|на\s+автомате)\b/i), value: "automatic" },
   { pattern: cyrb(/\b(?:варик|вариатор[а-яё]*|вибратор|cvt|бесступенчат[а-яё]*|на\s+вариаторе)\b/i), value: "cvt" },
+  // Robot(ic) transmissions are treated as automatic for customs duty calculation purposes
   { pattern: cyrb(/\b(?:робот[а-яё]*|ркпп|роботизированн[а-яё]*)\b/i), value: "automatic" },
 ];
 
@@ -97,7 +98,7 @@ const climateAliases: RegExp = cyrb(/\b(?:клима|климат|кондей|�
 /** Fuel type aliases */
 const fuelAliases: Array<{ pattern: RegExp; value: "diesel" | "gasoline" | "hybrid" | "ev" }> = [
   { pattern: cyrb(/\b(?:саляра|дизель|дт|тракторн[а-яё]*\s+топливо|солярк[а-яё]*|дизелёк|дизелек)\b/i), value: "diesel" },
-  { pattern: cyrb(/\b(?:зажигалка|бенз(?:ин)?|бензинк[а-яё]*|атмосферник)\b/i), value: "gasoline" },
+  { pattern: cyrb(/\b(?:зажигалка|бенз(?:ин)?|бензинк[а-яё]*)\b/i), value: "gasoline" },
   { pattern: cyrb(/\b(?:гибрид|гибра|гибридка|гибридн[а-яё]*)\b/i), value: "hybrid" },
   { pattern: cyrb(/\b(?:электричка|электро|ev|электромобиль|электрокар)\b/i), value: "ev" },
 ];

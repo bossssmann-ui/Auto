@@ -938,7 +938,6 @@ console.log("\n═══ Expanded Slang: Fuel Type ═══");
     ["дизелёк", "diesel"],
     ["зажигалка", "gasoline"],
     ["бензинка", "gasoline"],
-    ["атмосферник", "gasoline"],
     ["гибра", "hybrid"],
     ["гибридная", "hybrid"],
     ["электричка", "ev"],
