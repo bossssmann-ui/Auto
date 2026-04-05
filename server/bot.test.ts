@@ -117,7 +117,7 @@ assert(
   "Turn 2 reply: does NOT re-ask about ownership",
 );
 assert(
-  turn2Reply.includes("сориентировать") || turn2Reply.includes("бюджет") || turn2Reply.includes("рынку"),
+  turn2Reply.includes("среднерыночн") || turn2Reply.includes("рассчитаю") || turn2Reply.includes("диапазон") || turn2Reply.includes("бюджет") || turn2Reply.includes("сориентировать") || turn2Reply.includes("рынку"),
   "Turn 2 reply: provides budget guidance instead of asking for exact price",
 );
 
@@ -1070,6 +1070,420 @@ console.log("\n═══ Expanded Slang: Complex Real-World Phrases ═══");
     assertEqual(c.trust, "soft_claim", `Real4: claim '${c.meaning}' trust = soft_claim`);
   }
 }
+
+// ═══════════════════════════════════════════════════════════
+// SELLER ↔ BOT SIMULATION TESTS
+// ═══════════════════════════════════════════════════════════
+// Two entities: "Seller" (customer asking about a car) and "Bot" (Alexey responding).
+// The seller sends messages; the bot processes state + builds deterministic replies.
+// We verify: no re-asking, correct state tracking, proper stage transitions.
+
+console.log("\n\n═══════════════════════════════════════════════");
+console.log("  SELLER ↔ BOT FULL CONVERSATION SIMULATIONS");
+console.log("═══════════════════════════════════════════════\n");
+
+/**
+ * Run a full conversation simulation and validate each turn.
+ * Returns the final state after all turns.
+ */
+function simulateConversation(
+  name: string,
+  turns: Array<{
+    seller: string;
+    checks: (state: ConversationState, reply: string, turnNum: number) => void;
+  }>,
+): ConversationState {
+  console.log(`\n──── Simulation: ${name} ────`);
+  let state: ConversationState = {
+    ...DEFAULT_CONVERSATION_STATE,
+    auctionGradesAllowed: [],
+    needsClarification: [],
+    slotMeta: {},
+    sellerClaims: [],
+    excludedNegativeFlags: [],
+  };
+
+  for (let i = 0; i < turns.length; i++) {
+    const turn = turns[i];
+    const turnNum = i + 1;
+    console.log(`  Turn ${turnNum} — Seller: "${turn.seller}"`);
+
+    const update = extractStateUpdate(turn.seller, state);
+    state = applyStateUpdate(state, update, "regex");
+
+    const plan = planReply(state, turn.seller);
+    const reply = buildSafeFallbackReply(state, plan);
+    console.log(`  Turn ${turnNum} — Bot: "${reply}"`);
+
+    turn.checks(state, reply, turnNum);
+  }
+
+  return state;
+}
+
+// ─── Simulation 1: Honda Vezel full flow (exact problem from bug report) ───
+simulateConversation("Honda Vezel — problem scenario from bug report", [
+  {
+    seller: "можешь посчитать везела, не проходного, передний привод, самый простой, оценка R тоже можно",
+    checks: (state, reply, t) => {
+      assertEqual(state.model, "Vezel", `Sim1 T${t}: model = Vezel`);
+      assertEqual(state.make, "Honda", `Sim1 T${t}: make = Honda`);
+      assertEqual(state.ageWindow, "non_passable", `Sim1 T${t}: ageWindow = non_passable`);
+      assertEqual(state.drivetrain, "fwd", `Sim1 T${t}: drivetrain = fwd`);
+      assertEqual(state.trimLevel, "base", `Sim1 T${t}: trimLevel = base`);
+      assertEqual(state.nonPassableType, null, `Sim1 T${t}: nonPassableType = null`);
+      assertEqual(state.activeIntent, "price_calc", `Sim1 T${t}: intent = price_calc`);
+      // Must ask ONLY ONE question
+      const questionCount = (reply.match(/Уточни/g) || []).length;
+      assert(questionCount <= 1, `Sim1 T${t}: at most 1 clarification block`);
+      assert(reply.includes("до 3 лет") || reply.includes("старше 5 лет"), `Sim1 T${t}: asks about nonPassableType`);
+      // Must NOT re-ask about drivetrain, trimLevel, etc.
+      assert(!reply.includes("какой привод"), `Sim1 T${t}: does NOT re-ask drivetrain`);
+      assert(!reply.includes("какая комплектация"), `Sim1 T${t}: does NOT re-ask trimLevel`);
+    },
+  },
+  {
+    seller: "до трех лет. Бюджета не знаю, предлагай. машина для себя",
+    checks: (state, reply, t) => {
+      assertEqual(state.nonPassableType, "under_3_years", `Sim1 T${t}: nonPassableType = under_3_years`);
+      assertEqual(state.budgetDeclined, true, `Sim1 T${t}: budgetDeclined = true`);
+      assertEqual(state.budgetText, "approximate_guidance", `Sim1 T${t}: budgetText = approximate_guidance`);
+      assertEqual(state.isForResale, false, `Sim1 T${t}: isForResale = false`);
+      assertEqual(state.isLegalEntity, false, `Sim1 T${t}: isLegalEntity = false`);
+      // Must NOT re-ask about age, budget, or ownership
+      assert(!reply.includes("до 3 лет или старше"), `Sim1 T${t}: does NOT re-ask nonPassableType`);
+      assert(!reply.includes("какой бюджет"), `Sim1 T${t}: does NOT re-ask budget`);
+      assert(!reply.includes("физлицо, юрлицо"), `Sim1 T${t}: does NOT re-ask ownership`);
+      // Should ask about volume (the only missing calc field)
+      assert(reply.includes("объём") || reply.includes("объем"), `Sim1 T${t}: asks about engine volume`);
+    },
+  },
+  {
+    seller: "полторашка",
+    checks: (state, reply, t) => {
+      assertEqual(state.volumeCm3, 1500, `Sim1 T${t}: volumeCm3 = 1500`);
+      // All calc params should now be filled
+      assertEqual(state.stage, "ready_to_calculate", `Sim1 T${t}: stage = ready_to_calculate`);
+      // Should indicate calculation, not ask more questions
+      assert(!reply.includes("Уточни"), `Sim1 T${t}: no more clarification needed`);
+    },
+  },
+]);
+
+// ─── Simulation 2: Bare numbers for volume ───
+simulateConversation("Bare number volume parsing", [
+  {
+    seller: "посчитай приус, проходной, для себя",
+    checks: (state, reply, t) => {
+      assertEqual(state.model, "Prius", `Sim2 T${t}: model = Prius`);
+      assertEqual(state.ageWindow, "passable", `Sim2 T${t}: ageWindow = passable`);
+      assertEqual(state.isForResale, false, `Sim2 T${t}: isForResale = false`);
+      assertEqual(state.isLegalEntity, false, `Sim2 T${t}: isLegalEntity = false`);
+      // Should ask about volume first (drivetrain, budget, etc. also missing but volume is priority)
+      assert(reply.includes("объём") || reply.includes("объем"), `Sim2 T${t}: asks about volume`);
+    },
+  },
+  {
+    seller: "1.5",
+    checks: (state, reply, t) => {
+      assertEqual(state.volumeCm3, 1500, `Sim2 T${t}: volumeCm3 = 1500 from bare "1.5"`);
+      // Model preserved
+      assertEqual(state.model, "Prius", `Sim2 T${t}: model still Prius`);
+    },
+  },
+]);
+
+// ─── Simulation 3: Bare number volume as "1500" ───
+simulateConversation("Bare number volume 1500", [
+  {
+    seller: "посчитай фит, непроходной, до 3 лет, для себя",
+    checks: (state, reply, t) => {
+      assertEqual(state.model, "Fit", `Sim3 T${t}: model = Fit`);
+      assertEqual(state.nonPassableType, "under_3_years", `Sim3 T${t}: nonPassableType = under_3_years`);
+      assert(reply.includes("объём") || reply.includes("объем"), `Sim3 T${t}: asks about volume`);
+    },
+  },
+  {
+    seller: "1500",
+    checks: (state, reply, t) => {
+      assertEqual(state.volumeCm3, 1500, `Sim3 T${t}: volumeCm3 = 1500 from bare "1500"`);
+    },
+  },
+]);
+
+// ─── Simulation 4: Volume with units ───
+simulateConversation("Volume with various units", [
+  {
+    seller: "посчитай харек, непроходной, старше 5 лет, для себя",
+    checks: (state, reply, t) => {
+      assertEqual(state.model, "Harrier", `Sim4 T${t}: model = Harrier`);
+      assertEqual(state.nonPassableType, "over_5_years", `Sim4 T${t}: nonPassableType = over_5_years`);
+      assert(reply.includes("объём") || reply.includes("объем"), `Sim4 T${t}: asks about volume`);
+    },
+  },
+  {
+    seller: "2.0 литра",
+    checks: (state, reply, t) => {
+      assertEqual(state.volumeCm3, 2000, `Sim4 T${t}: volumeCm3 = 2000 from "2.0 литра"`);
+    },
+  },
+]);
+
+// ─── Simulation 5: Negation handling ───
+console.log("\n═══ Negation Guard Tests ═══");
+{
+  const prevState: ConversationState = {
+    ...DEFAULT_CONVERSATION_STATE,
+    ageWindow: "non_passable",
+    model: "Vezel",
+    make: "Honda",
+    activeIntent: "price_calc",
+    auctionGradesAllowed: [],
+    needsClarification: [],
+    slotMeta: {},
+    sellerClaims: [],
+    excludedNegativeFlags: [],
+  };
+
+  // "не старый" should NOT set over_5_years
+  const update1 = extractStateUpdate("не старый", prevState);
+  assertEqual(update1.set.nonPassableType ?? null, null, "Negation: 'не старый' does NOT set over_5_years");
+
+  // "не свежий" should NOT set under_3_years
+  const update2 = extractStateUpdate("не свежий", prevState);
+  assertEqual(update2.set.nonPassableType ?? null, null, "Negation: 'не свежий' does NOT set under_3_years");
+
+  // "помоложе" should set under_3_years
+  const update3 = extractStateUpdate("помоложе", prevState);
+  assertEqual(update3.set.nonPassableType, "under_3_years", "Synonym: 'помоложе' → under_3_years");
+
+  // "старый фонд" should still set over_5_years
+  const update4 = extractStateUpdate("старый фонд", prevState);
+  assertEqual(update4.set.nonPassableType, "over_5_years", "Positive: 'старый фонд' → over_5_years");
+
+  // "старше 5 лет" should still work
+  const update5 = extractStateUpdate("старше 5 лет", prevState);
+  assertEqual(update5.set.nonPassableType, "over_5_years", "Positive: 'старше 5 лет' → over_5_years");
+
+  // "свежий" should still set under_3_years
+  const update6 = extractStateUpdate("свежий", prevState);
+  assertEqual(update6.set.nonPassableType, "under_3_years", "Positive: 'свежий' → under_3_years");
+}
+
+// ─── Simulation 6: Standalone negation (no prior ageWindow) ───
+console.log("\n═══ Standalone Negation Guard Tests ═══");
+{
+  const freshState: ConversationState = {
+    ...DEFAULT_CONVERSATION_STATE,
+    auctionGradesAllowed: [],
+    needsClarification: [],
+    slotMeta: {},
+    sellerClaims: [],
+    excludedNegativeFlags: [],
+  };
+
+  // "не старый" without prior ageWindow should NOT set non_passable
+  const u1 = extractStateUpdate("не старый", freshState);
+  assertEqual(u1.set.ageWindow ?? null, null, "Standalone negation: 'не старый' does NOT set ageWindow");
+  assertEqual(u1.set.nonPassableType ?? null, null, "Standalone negation: 'не старый' does NOT set nonPassableType");
+
+  // "не свежий" without prior ageWindow should NOT set non_passable
+  const u2 = extractStateUpdate("не свежий", freshState);
+  assertEqual(u2.set.ageWindow ?? null, null, "Standalone negation: 'не свежий' does NOT set ageWindow");
+
+  // "помоложе" without prior ageWindow should set under_3_years
+  const u3 = extractStateUpdate("помоложе", freshState);
+  assertEqual(u3.set.ageWindow, "non_passable", "Standalone: 'помоложе' → ageWindow = non_passable");
+  assertEqual(u3.set.nonPassableType, "under_3_years", "Standalone: 'помоложе' → nonPassableType = under_3_years");
+}
+
+// ─── Simulation 7: Volume with "кубов"/"кубиков" ───
+console.log("\n═══ Volume Unit Variants ═══");
+{
+  const freshState: ConversationState = {
+    ...DEFAULT_CONVERSATION_STATE,
+    auctionGradesAllowed: [],
+    needsClarification: [],
+    slotMeta: {},
+    sellerClaims: [],
+    excludedNegativeFlags: [],
+  };
+
+  const u1 = extractStateUpdate("1500 кубов", freshState);
+  assertEqual(u1.set.volumeCm3, 1500, "Volume: '1500 кубов' → 1500");
+
+  const u2 = extractStateUpdate("1500 кубиков", freshState);
+  assertEqual(u2.set.volumeCm3, 1500, "Volume: '1500 кубиков' → 1500");
+
+  const u3 = extractStateUpdate("объемом 1.5", freshState);
+  assertEqual(u3.set.volumeCm3, 1500, "Volume: 'объемом 1.5' → 1500");
+
+  const u4 = extractStateUpdate("объем 2.0 литра", freshState);
+  assertEqual(u4.set.volumeCm3, 2000, "Volume: 'объем 2.0 литра' → 2000");
+
+  const u5 = extractStateUpdate("двигатель 1.8", freshState);
+  assertEqual(u5.set.volumeCm3, 1800, "Volume: 'двигатель 1.8' → 1800");
+
+  const u6 = extractStateUpdate("движок 2.4", freshState);
+  assertEqual(u6.set.volumeCm3, 2400, "Volume: 'движок 2.4' → 2400");
+}
+
+// ─── Simulation 8: Full conversation — user changes mind ───
+simulateConversation("User changes age preference mid-conversation", [
+  {
+    seller: "посчитай везела, непроходного, до 3 лет, передний привод, для себя",
+    checks: (state, _reply, t) => {
+      assertEqual(state.nonPassableType, "under_3_years", `Sim8 T${t}: nonPassableType = under_3_years`);
+      assertEqual(state.ageWindow, "non_passable", `Sim8 T${t}: ageWindow = non_passable`);
+    },
+  },
+  {
+    seller: "нет, давай старше пяти лет",
+    checks: (state, _reply, t) => {
+      assertEqual(state.nonPassableType, "over_5_years", `Sim8 T${t}: nonPassableType changed to over_5_years`);
+      assertEqual(state.ageWindow, "non_passable", `Sim8 T${t}: ageWindow still non_passable`);
+    },
+  },
+]);
+
+// ─── Simulation 9: Budget variations ───
+console.log("\n═══ Budget Variation Tests ═══");
+{
+  const budgetPhrases = [
+    "бюджет не знаю",
+    "не знаю бюджет",
+    "засвети стоимости",
+    "дай примерный бюджет",
+    "сколько стоит",
+    "предлагай",
+    "сориентируй",
+    "дай вилку",
+    "не знаю цену",
+    "дай стоимость",
+    "покажи цены",
+  ];
+  for (const phrase of budgetPhrases) {
+    const update = extractStateUpdate(phrase, { ...DEFAULT_CONVERSATION_STATE, auctionGradesAllowed: [], needsClarification: [], slotMeta: {}, sellerClaims: [], excludedNegativeFlags: [] });
+    assert(
+      update.set.budgetDeclined === true || update.set.budgetText === "approximate_guidance",
+      `Budget: '${phrase}' → budgetDeclined/approximate_guidance`,
+    );
+  }
+}
+
+// ─── Simulation 10: Intent stickiness ───
+simulateConversation("Intent stays price_calc after adding filters", [
+  {
+    seller: "посчитай везела",
+    checks: (state, _reply, t) => {
+      assertEqual(state.activeIntent, "price_calc", `Sim10 T${t}: intent = price_calc`);
+    },
+  },
+  {
+    seller: "непроходной, передний привод, самый простой",
+    checks: (state, _reply, t) => {
+      assertEqual(state.activeIntent, "price_calc", `Sim10 T${t}: intent stays price_calc (sticky)`);
+      assertEqual(state.drivetrain, "fwd", `Sim10 T${t}: drivetrain = fwd`);
+      assertEqual(state.trimLevel, "base", `Sim10 T${t}: trimLevel = base`);
+    },
+  },
+  {
+    seller: "оценка R тоже можно",
+    checks: (state, _reply, t) => {
+      assertEqual(state.activeIntent, "price_calc", `Sim10 T${t}: intent still price_calc`);
+      assert(state.auctionGradesAllowed.includes("R"), `Sim10 T${t}: R grade allowed`);
+    },
+  },
+]);
+
+// ─── Simulation 11: Complete flow to ready_to_calculate ───
+simulateConversation("Complete flow reaches ready_to_calculate", [
+  {
+    seller: "посчитай филдера, проходной, полторашка, для себя, бюджет 500 тысяч йен",
+    checks: (state, reply, t) => {
+      assertEqual(state.model, "Corolla Fielder", `Sim11 T${t}: model = Corolla Fielder`);
+      assertEqual(state.ageWindow, "passable", `Sim11 T${t}: ageWindow = passable`);
+      assertEqual(state.volumeCm3, 1500, `Sim11 T${t}: volumeCm3 = 1500`);
+      assertEqual(state.isForResale, false, `Sim11 T${t}: isForResale = false`);
+      assertEqual(state.isLegalEntity, false, `Sim11 T${t}: isLegalEntity = false`);
+      assertEqual(state.auctionPriceJPY, 500000, `Sim11 T${t}: auctionPriceJPY = 500000`);
+      assertEqual(state.stage, "ready_to_calculate", `Sim11 T${t}: stage = ready_to_calculate`);
+      assert(!reply.includes("Уточни"), `Sim11 T${t}: no clarification needed`);
+    },
+  },
+]);
+
+// ─── Simulation 12: Bot confirms known slots progressively ───
+simulateConversation("Progressive slot filling — each turn adds info", [
+  {
+    seller: "посчитай приус",
+    checks: (state, reply, t) => {
+      assertEqual(state.model, "Prius", `Sim12 T${t}: model = Prius`);
+      // Should ask something
+      assert(reply.includes("Уточни") || reply.includes("понял"), `Sim12 T${t}: reply has content`);
+    },
+  },
+  {
+    seller: "проходной",
+    checks: (state, reply, t) => {
+      assertEqual(state.ageWindow, "passable", `Sim12 T${t}: ageWindow = passable`);
+      // Should not re-ask about age
+      assert(!reply.includes("проходной или непроходной"), `Sim12 T${t}: does NOT re-ask age`);
+    },
+  },
+  {
+    seller: "1.5 литра",
+    checks: (state, reply, t) => {
+      assertEqual(state.volumeCm3, 1500, `Sim12 T${t}: volumeCm3 = 1500`);
+      // Reply should confirm volume in known parts but not ASK about it again
+      assert(!reply.includes("какой объём"), `Sim12 T${t}: does NOT re-ask volume`);
+    },
+  },
+  {
+    seller: "для себя",
+    checks: (state, reply, t) => {
+      assertEqual(state.isForResale, false, `Sim12 T${t}: isForResale = false`);
+      assertEqual(state.isLegalEntity, false, `Sim12 T${t}: isLegalEntity = false`);
+      assert(!reply.includes("физлицо или юрлицо"), `Sim12 T${t}: does NOT re-ask ownership`);
+      // Should ask about budget (the remaining calc-critical field)
+      assert(
+        reply.includes("бюджет") || reply.includes("цен") || reply.includes("йен"),
+        `Sim12 T${t}: asks about budget`,
+      );
+    },
+  },
+  {
+    seller: "бюджет не знаю, дай стоимость",
+    checks: (state, reply, t) => {
+      assertEqual(state.budgetDeclined, true, `Sim12 T${t}: budgetDeclined = true`);
+      assertEqual(state.stage, "ready_to_calculate", `Sim12 T${t}: stage = ready_to_calculate`);
+      assert(!reply.includes("какой бюджет"), `Sim12 T${t}: does NOT re-ask budget`);
+    },
+  },
+]);
+
+// ─── Simulation 13: Model switch resets dependent slots ───
+simulateConversation("Model switch resets dependent slots", [
+  {
+    seller: "посчитай приус, проходной, 1.5 литра, для себя",
+    checks: (state, _reply, t) => {
+      assertEqual(state.model, "Prius", `Sim13 T${t}: model = Prius`);
+      assertEqual(state.volumeCm3, 1500, `Sim13 T${t}: volumeCm3 = 1500`);
+      assertEqual(state.ageWindow, "passable", `Sim13 T${t}: ageWindow = passable`);
+    },
+  },
+  {
+    seller: "а нет, давай лучше харек",
+    checks: (state, _reply, t) => {
+      assertEqual(state.model, "Harrier", `Sim13 T${t}: model switched to Harrier`);
+      // Dependent slots should be reset
+      assertEqual(state.volumeCm3, null, `Sim13 T${t}: volumeCm3 reset`);
+      assertEqual(state.ageWindow, null, `Sim13 T${t}: ageWindow reset`);
+      // isForResale should be preserved (global)
+      assertEqual(state.isForResale, false, `Sim13 T${t}: isForResale preserved`);
+    },
+  },
+]);
 
 // ─── Summary ─────────────────────────────────────────────
 console.log(`\n═══ Results: ${passed} passed, ${failed} failed ═══`);

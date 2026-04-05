@@ -647,18 +647,15 @@ function planReply(state: ConversationState, _userMessage: string): string[] {
     if (state.volumeCm3 == null) {
       missingCritical.push("объём двигателя");
     }
-    // Priority 3: drivetrain
-    if (state.drivetrain == null) {
-      missingCritical.push("какой привод — передний, задний или полный");
-    }
-    // Priority 4: isForResale / isLegalEntity
+    // Priority 3: isForResale / isLegalEntity (calc-critical: affects customs duty)
     if (state.isForResale == null) {
       missingCritical.push("для перепродажи или нет");
     }
     if (state.isLegalEntity == null) {
       missingCritical.push("физлицо или юрлицо");
     }
-    // Priority 5: budget — LAST and skipped if budgetDeclined
+    // Priority 4: budget — LAST and skipped if budgetDeclined
+    // NOTE: drivetrain is NOT calc-critical — asked only for car_search intent
     if (state.auctionPriceJPY == null && !state.budgetText && !state.budgetDeclined) {
       missingCritical.push("бюджет или аукционная цена в йенах");
     }
@@ -917,18 +914,15 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
     if (!state.volumeCm3) {
       missingQuestions.push("какой объём двигателя");
     }
-    // Priority 3: drivetrain
-    if (!state.drivetrain) {
-      missingQuestions.push("какой привод — передний, задний или полный");
-    }
-    // Priority 4: isForResale / isLegalEntity
+    // Priority 3: isForResale / isLegalEntity (calc-critical: affects customs duty)
     if (state.isForResale == null && state.isLegalEntity == null) {
       missingQuestions.push("оформление на физлицо, юрлицо или под перепродажу");
     } else {
       if (state.isForResale == null) missingQuestions.push("для перепродажи или для себя");
       if (state.isLegalEntity == null) missingQuestions.push("физлицо или юрлицо");
     }
-    // Priority 5: budget — LAST and skipped if budgetDeclined
+    // Priority 4: budget — LAST and skipped if budgetDeclined
+    // NOTE: drivetrain is NOT calc-critical (doesn't affect price) — asked only for car_search
     if (!state.auctionPriceJPY && !state.budgetText && !state.budgetDeclined) {
       missingQuestions.push("какой бюджет или цена покупки в йенах");
     }
@@ -1643,10 +1637,11 @@ function extractStateUpdate(
 
   // Context-aware: standalone "свежий"/"старше"/"до 3 лет" when ageWindow is already non_passable.
   // Allows overriding a previously set nonPassableType (e.g., user changes from "до 3 лет" to "старше 5 лет").
+  // Negation guard: "не старый" ≠ "старый", "не свежий" ≠ "свежий".
   if (previousState.ageWindow === "non_passable" && !update.nonPassableType && !update.ageWindow) {
-    if (/(?:свеж|до\s*(?:3\s*(?:-?\s*х)?|тр[её]х)|менее\s*(?:3|тр[её]х)|младше\s*(?:3|тр[её]х)|не\s*старше\s*(?:3|тр[её]х)|молод)/i.test(msg)) {
+    if (/(?:свеж|помоложе|до\s*(?:3\s*(?:-?\s*х)?|тр[её]х)|менее\s*(?:3|тр[её]х)|младше\s*(?:3|тр[её]х)|не\s*старше\s*(?:3|тр[её]х)|молод)/i.test(msg) && !/не\s+свеж/i.test(msg)) {
       update.nonPassableType = "under_3_years";
-    } else if (/(?:стар(?:ый)?\s*фонд|стар|больше\s*(?:5|пяти)|более\s*(?:5|пяти)|старше\s*(?:5|пяти)|свыше\s*(?:5|пяти)|от\s*(?:5|пяти)|5\s*\+)/i.test(msg)) {
+    } else if (/(?:стар(?:ый|ее|ше)?\s*фонд|(?:(?<!не\s)(?<!не\s\s))стар(?:ше|ый|ее|ую|ое)?(?:\s|,|$)|больше\s*(?:5|пяти)|более\s*(?:5|пяти)|старше\s*(?:5|пяти)|свыше\s*(?:5|пяти)|от\s*(?:5|пяти)|5\s*\+)/i.test(msg) && !/не\s+стар/i.test(msg)) {
       update.nonPassableType = "over_5_years";
     }
   }
@@ -1654,11 +1649,12 @@ function extractStateUpdate(
   // Standalone nonPassableType detection (even without "непроходной" in this message):
   // When the user says "до 3 лет" or "от 5 лет" alone, infer both ageWindow + nonPassableType.
   // Also allows overriding a previously set nonPassableType when user explicitly changes their mind.
+  // Added "помоложе" for "younger" intent.
   if (!update.ageWindow && !update.nonPassableType) {
-    if (/(?:до\s*(?:3\s*(?:-?\s*х)?|тр[её]х)\s*лет|младше\s*(?:3|тр[её]х)(?:\s*лет)?|не\s*старше\s*(?:3|тр[её]х)(?:\s*лет)?|свежи[йея])/i.test(msg)) {
+    if (/(?:до\s*(?:3\s*(?:-?\s*х)?|тр[её]х)\s*лет|младше\s*(?:3|тр[её]х)(?:\s*лет)?|не\s*старше\s*(?:3|тр[её]х)(?:\s*лет)?|свежи[йея]|помоложе)/i.test(msg) && !/не\s+свеж/i.test(msg)) {
       update.ageWindow = "non_passable";
       update.nonPassableType = "under_3_years";
-    } else if (/(?:(?:от|старше|свыше|более|больше)\s*(?:5|пяти)\s*(?:-?\s*и)?\s*лет|5\s*\+\s*лет|старше\s*(?:5|пяти)|стар(?:ый)?\s*фонд)/i.test(msg)) {
+    } else if (/(?:(?:от|старше|свыше|более|больше)\s*(?:5|пяти)\s*(?:-?\s*и)?\s*лет|5\s*\+\s*лет|старше\s*(?:5|пяти)|стар(?:ый)?\s*фонд)/i.test(msg) && !/не\s+стар/i.test(msg)) {
       update.ageWindow = "non_passable";
       update.nonPassableType = "over_5_years";
     }
@@ -1833,7 +1829,8 @@ function extractStateUpdate(
   }
 
   // ── Volume parsing ──
-  const volumeMatch = msg.match(/(?:объ[её]м(?:ом)?|двигатель|мотор)\s*(?:—|-)?\s*([\d.,]+)\s*(?:л(?:итр)?|куб|см3|cc)/i);
+  // Handle declined forms: объём, объёмом, объёму, двигатель, двигателем, мотор, мотором, движок
+  const volumeMatch = msg.match(/(?:объ[её]м[а-яё]*|двигател[а-яё]*|мотор[а-яё]*|движ(?:ок|к[а-яё]*))\s*(?:—|-)?\s*([\d.,]+)\s*(?:л(?:итр[а-яё]*)?|куб[а-яё]*|см3|cc)?/i);
   if (volumeMatch) {
     const volStr = volumeMatch[1].replace(",", ".");
     const volNum = parseFloat(volStr);
@@ -1845,11 +1842,11 @@ function extractStateUpdate(
     }
   }
 
-  // Fallback volume: with unit but no prefix keyword (e.g., "1.5 литра", "1500 куб")
+  // Fallback volume: with unit but no prefix keyword (e.g., "1.5 литра", "1500 кубов")
   if (!update.volumeCm3) {
     // Note: trailing \b removed — JS \b doesn't match Cyrillic word boundaries
-    const volumeFallback = msg.match(/\b([\d]+[.,][\d]+)\s*(?:л(?:итр[аов]?)?)(?:\s|$|[.,])/i)
-      ?? msg.match(/\b(\d{3,5})\s*(?:куб(?:\.\s*см)?|см3|cc)(?:\s|$|[.,])/i);
+    const volumeFallback = msg.match(/\b([\d]+[.,][\d]+)\s*(?:л(?:итр[а-яё]*)?)(?:\s|$|[.,])/i)
+      ?? msg.match(/\b(\d{3,5})\s*(?:куб[а-яё]*(?:\.\s*см)?|см3|cc)(?:\s|$|[.,])/i);
     if (volumeFallback) {
       const volStr = volumeFallback[1].replace(",", ".");
       const volNum = parseFloat(volStr);
@@ -1861,9 +1858,11 @@ function extractStateUpdate(
     }
   }
 
-  // Context-aware: bare number when volume is the pending question
+  // Context-aware: bare number when volume is the pending question.
+  // Relaxed: also handles short messages like "1.5 литра" or "1500 кубиков" that earlier regexes missed.
   if (!update.volumeCm3 && previousState.pendingQuestion && /объ[её]м/i.test(previousState.pendingQuestion)) {
-    const bareVol = msg.match(/^\s*([\d]+[.,]?[\d]*)\s*$/);
+    // Try strict bare number first (just digits)
+    const bareVol = msg.match(/(?:^|\s)([\d]+[.,]?[\d]*)\s*(?:л(?:итр[а-яё]*)?|куб[а-яё]*|см3|cc)?\s*(?:$|[.,!?])/i);
     if (bareVol) {
       const v = parseFloat(bareVol[1].replace(",", "."));
       if (v > 0 && v < 10) {
