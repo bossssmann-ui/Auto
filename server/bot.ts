@@ -167,6 +167,7 @@ interface ConversationState {
 
   priority: "cheapest" | "best_condition" | "balanced" | null;
 
+  calculationDone: boolean;
   pendingQuestion: string | null;
   needsClarification: string[];
 
@@ -213,6 +214,7 @@ const DEFAULT_CONVERSATION_STATE: ConversationState = {
   isForResale: null,
   isLegalEntity: null,
   priority: null,
+  calculationDone: false,
   pendingQuestion: null,
   needsClarification: [],
   lastResolvedModelAlias: null,
@@ -909,11 +911,17 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
   }
 
   if (isBudgetGuidanceMode && missingQuestions.length === 0) {
-    // All other slots are filled — auto-calculate with market price range
-    parts.push("Сейчас рассчитаю по среднерыночным ценам и дам диапазон стоимости.");
+    if (state.calculationDone) {
+      parts.push("Расчёт по среднерыночным ценам уже выполнен. Если хотите уточнить — напишите новые параметры.");
+    } else {
+      // All other slots are filled — auto-calculate with market price range
+      parts.push("Сейчас рассчитаю по среднерыночным ценам и дам диапазон стоимости.");
+    }
   } else if (missingQuestions.length > 0) {
     // Strictly ONE question at a time
     parts.push(`Уточни, пожалуйста: ${missingQuestions[0]}.`);
+  } else if (state.calculationDone) {
+    parts.push("Расчёт уже выполнен. Если хотите пересчитать с другими параметрами — напишите новые данные.");
   } else if (state.stage === "ready_to_calculate") {
     parts.push("Все данные есть, сейчас посчитаю.");
   }
@@ -1012,6 +1020,7 @@ function clearStateForModelSwitch(previous: ConversationState): ConversationStat
     auctionPriceJPY: null,
     volumeCm3: null,
     priority: null,
+    calculationDone: false,
     pendingQuestion: null,
     needsClarification: [],
     // budgetText, isForResale, isLegalEntity are preserved via spread
@@ -1192,6 +1201,7 @@ function applyStateUpdate(
     isForResale: pick(base.isForResale, current.isForResale),
     isLegalEntity: pick(base.isLegalEntity, current.isLegalEntity),
     priority: pick(base.priority, current.priority),
+    calculationDone: base.calculationDone,
     pendingQuestion: null, // will be recomputed
     needsClarification: [], // will be recomputed
     lastResolvedModelAlias: current.lastResolvedModelAlias ?? base.lastResolvedModelAlias,
@@ -1219,6 +1229,20 @@ function applyStateUpdate(
   merged.needsClarification = computeNeedsClarification(merged);
   merged.stage = deriveStage(merged);
   merged.pendingQuestion = buildPendingQuestion(merged);
+
+  // ── Reset calculationDone when calc-critical fields change ──
+  if (merged.calculationDone) {
+    const calcCriticalKeys: Array<keyof typeof current> = [
+      "auctionPriceJPY", "volumeCm3", "isForResale", "isLegalEntity",
+      "year", "ageWindow", "nonPassableType", "model",
+    ];
+    const calcFieldChanged = calcCriticalKeys.some(k =>
+      current[k] !== undefined && current[k] !== null,
+    );
+    if (calcFieldChanged || isModelSwitch) {
+      merged.calculationDone = false;
+    }
+  }
 
   return merged;
 }
@@ -2523,7 +2547,7 @@ PARSED INTENT (структурированный разбор)
   // ── Auto-calculate when all params are ready ──
   // Use buildCalcParamsFromState directly instead of relying on LLM making the correct tool call
   let autoCalcDone = false;
-  if (mergedState.stage === "ready_to_calculate") {
+  if (mergedState.stage === "ready_to_calculate" && !mergedState.calculationDone) {
     const isRangeMode = (mergedState.budgetText === "approximate_guidance" || mergedState.budgetDeclined) && mergedState.auctionPriceJPY == null;
 
     if (isRangeMode) {
@@ -2547,6 +2571,8 @@ PARSED INTENT (структурированный разбор)
             `Распиши клиенту ДИАПАЗОН стоимости «от ... до ...» понятно и красиво по-русски. Объясни, что точная цена зависит от аукционной стоимости конкретного лота. НЕ вызывай calculate_vehicle_price — расчёт уже сделан. НЕ спрашивай бюджет повторно.`,
           );
           autoCalcDone = true;
+          mergedState.calculationDone = true;
+          mem.state = mergedState;
         } catch (err) {
           console.error("❌ Auto-calculate range error:", err);
         }
@@ -2563,11 +2589,21 @@ PARSED INTENT (структурированный разбор)
             `Распиши этот результат клиенту понятно и красиво по-русски. НЕ вызывай calculate_vehicle_price — расчёт уже сделан.`,
           );
           autoCalcDone = true;
+          mergedState.calculationDone = true;
+          mem.state = mergedState;
         } catch (err) {
           console.error("❌ Auto-calculate error:", err);
         }
       }
     }
+  } else if (mergedState.calculationDone) {
+    // Calculation was already performed — tell LLM to handle follow-up naturally
+    autoCalcDone = true;
+    stateContextParts.push(
+      `\n═══ ИНСТРУКЦИЯ ═══`,
+      `Расчёт стоимости уже был выполнен ранее. НЕ вызывай calculate_vehicle_price повторно.`,
+      `Отвечай на вопросы клиента по существу. Если клиент хочет пересчитать с другими параметрами — скажи, какие именно новые данные нужны.`,
+    );
   }
 
   // Build the state context as a single system message
