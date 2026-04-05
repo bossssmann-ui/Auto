@@ -334,6 +334,7 @@ function deriveStage(state: ConversationState): ConversationStage {
     // ready_to_calculate ONLY if ALL required calc fields exist
     const hasModel = !!state.model;
     const hasPrice = state.auctionPriceJPY != null;
+    const hasBudgetGuidance = state.budgetText === "approximate_guidance";
     const hasVolume = state.volumeCm3 != null;
     const hasAge = state.year != null || state.ageWindow != null;
     const hasResale = state.isForResale != null;
@@ -341,7 +342,8 @@ function deriveStage(state: ConversationState): ConversationStage {
     const nonPassableOk =
       state.ageWindow !== "non_passable" || state.nonPassableType != null;
 
-    if (hasModel && hasPrice && hasVolume && hasAge && hasResale && hasEntity && nonPassableOk) {
+    // Allow ready_to_calculate with approximate_guidance (price range mode)
+    if (hasModel && (hasPrice || hasBudgetGuidance) && hasVolume && hasAge && hasResale && hasEntity && nonPassableOk) {
       return "ready_to_calculate";
     }
     return "collecting_calc_params";
@@ -535,10 +537,83 @@ function buildCalcParamsFromState(state: ConversationState): CalcParams | null {
 }
 
 /**
+ * Get typical market auction price range (low / high) in JPY
+ * based on engine volume and vehicle age.
+ * Used when user says they don't know the budget — we provide a range.
+ */
+function getMarketPriceRangeJPY(volumeCm3: number, ageYears: number): { low: number; high: number } {
+  // Ranges calibrated to Japanese auction market (2024-2026 data)
+  if (ageYears <= 3) {
+    // Fresh cars — higher prices
+    if (volumeCm3 <= 1500) return { low: 800_000, high: 1_800_000 };
+    if (volumeCm3 <= 1800) return { low: 1_000_000, high: 2_500_000 };
+    return { low: 1_500_000, high: 3_500_000 };
+  }
+  if (ageYears <= 5) {
+    // Passable window (3-5 years)
+    if (volumeCm3 <= 1500) return { low: 400_000, high: 1_200_000 };
+    if (volumeCm3 <= 1800) return { low: 600_000, high: 1_800_000 };
+    return { low: 800_000, high: 2_500_000 };
+  }
+  // Older cars (5+ years)
+  if (volumeCm3 <= 1500) return { low: 150_000, high: 700_000 };
+  if (volumeCm3 <= 1800) return { low: 200_000, high: 1_000_000 };
+  return { low: 300_000, high: 1_500_000 };
+}
+
+/**
+ * Build CalcParams for price range estimation (approximate_guidance mode).
+ * Returns low/high CalcParams. Returns null if required non-price fields are missing.
+ */
+function buildCalcParamsRange(state: ConversationState): { low: CalcParams; high: CalcParams } | null {
+  if (state.volumeCm3 == null) return null;
+  if (state.isForResale == null) return null;
+  if (state.isLegalEntity == null) return null;
+
+  let ageYears: number | null = null;
+  if (state.year != null) {
+    ageYears = new Date().getFullYear() - state.year;
+  } else if (state.ageWindow === "passable") {
+    ageYears = 4;
+  } else if (state.ageWindow === "non_passable" && state.nonPassableType === "under_3_years") {
+    ageYears = 1;
+  } else if (state.ageWindow === "non_passable" && state.nonPassableType === "over_5_years") {
+    ageYears = 7;
+  }
+  if (ageYears == null) return null;
+
+  let vehicleType: CalcParams["vehicleType"] = "car";
+  if (state.volumeCm3 > 1900) {
+    vehicleType = "sanctioned";
+  }
+
+  const range = getMarketPriceRangeJPY(state.volumeCm3, ageYears);
+
+  return {
+    low: {
+      vehicleType,
+      priceJPY: range.low,
+      volumeCm3: state.volumeCm3,
+      ageYears,
+      isForResale: state.isForResale,
+      isLegalEntity: state.isLegalEntity,
+    },
+    high: {
+      vehicleType,
+      priceJPY: range.high,
+      volumeCm3: state.volumeCm3,
+      ageYears,
+      isForResale: state.isForResale,
+      isLegalEntity: state.isLegalEntity,
+    },
+  };
+}
+
+/**
  * Deterministic reply planner — runs BEFORE the LLM.
  * Returns a list of questions/instructions to guide the reply.
  * If model is known, never asks about brand/model/type.
- * Asks only the top 1-2 missing fields.
+ * Asks only the top 1 missing field (strictly one question at a time).
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function planReply(state: ConversationState, _userMessage: string): string[] {
@@ -549,7 +624,7 @@ function planReply(state: ConversationState, _userMessage: string): string[] {
     hints.push(`Модель определена: ${state.make ?? ""} ${state.model}. НЕ спрашивай бренд/модель/тип.`);
   }
 
-  // Collect missing critical fields (max 2)
+  // Collect missing critical fields (max 1 — strictly one question at a time)
   const missingCritical: string[] = [];
 
   if (state.activeIntent === "price_calc") {
@@ -584,10 +659,10 @@ function planReply(state: ConversationState, _userMessage: string): string[] {
     }
   }
 
-  // Only top 2
-  const top = missingCritical.slice(0, 2);
+  // Only top 1 — strictly one clarifying question at a time
+  const top = missingCritical.slice(0, 1);
   if (top.length > 0) {
-    hints.push(`Спроси ТОЛЬКО: ${top.join(", ")}.`);
+    hints.push(`Спроси ТОЛЬКО: ${top[0]}.`);
   }
 
   return hints;
@@ -813,10 +888,11 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
   }
 
   if (isBudgetGuidanceMode && missingQuestions.length === 0) {
-    // All other slots are filled — provide approximate budget guidance
-    parts.push("По бюджету без точной цены в йенах могу сориентировать примерно по рынку: подскажи диапазон по состоянию/пробегу, или могу посчитать от минимального и более живого варианта.");
+    // All other slots are filled — auto-calculate with market price range
+    parts.push("Сейчас рассчитаю по среднерыночным ценам и дам диапазон стоимости.");
   } else if (missingQuestions.length > 0) {
-    parts.push(`Уточни, пожалуйста: ${missingQuestions.join(", ")}.`);
+    // Strictly ONE question at a time
+    parts.push(`Уточни, пожалуйста: ${missingQuestions[0]}.`);
   } else if (state.stage === "ready_to_calculate") {
     parts.push("Все данные есть, сейчас посчитаю.");
   }
@@ -1639,7 +1715,7 @@ function extractStateUpdate(
 
   // ── Budget parsing ──
   // Detect "don't know the budget" / "show me approximate prices" FIRST
-  const BUDGET_UNKNOWN_RE = /(?:бюджет\s+не\s*знаю|не\s+знаю\s+бюджет|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост))/i;
+  const BUDGET_UNKNOWN_RE = /(?:бюджет\s+не\s*знаю|не\s+знаю\s+бюджет|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост)|жду\s+от\s+(?:тебя|вас)\s+цен|дай\s+ценообразовани|дай\s+цен(?:у|ы|ник)|покажи\s+цен|скажи\s+цен)/i;
   if (BUDGET_UNKNOWN_RE.test(msg)) {
     update.budgetText = "approximate_guidance";
   }
@@ -1938,7 +2014,7 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
   • бюджет
   • прочие ограничения (цвет, руль, опции и т.д.)
 
-Если клиент уже назвал конкретную модель И хотя бы 2 фильтра — НЕ задавай общие вопросы типа «какую машину хотите?», «какой бренд?», «кроссовер или внедорожник?». Сразу подтверди понятые фильтры и задай максимум 1–2 точечных уточняющих вопроса по самым важным недостающим параметрам (бюджет, диапазон лет, гибрид/бензин).
+Если клиент уже назвал конкретную модель И хотя бы 2 фильтра — НЕ задавай общие вопросы типа «какую машину хотите?», «какой бренд?», «кроссовер или внедорожник?». Сразу подтверди понятые фильтры и задай строго 1 точечный уточняющий вопрос — самый важный из недостающих параметров.
 
 ════════════════════════════════════════════
 ЖЁСТКОЕ ПРАВИЛО: НИКОГДА НЕ ТЕРЯЙ МОДЕЛЬ
@@ -2186,6 +2262,10 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 Если просят расчёт: собери тип, цену в йенах, объём двигателя, возраст, для кого авто (физлицо / юрлицо / перепродажа) — затем вызови calculate_vehicle_price. Результат распиши понятно.
 Лимит скидки — 20 000 ₽, только для закрытия сделки.
 
+ПРАВИЛО: Если клиент говорит «не знаю бюджет», «жду от тебя цену», «дай ценообразование», «сколько стоит», «сориентируй по цене» — НЕ спрашивай бюджет повторно. Вместо этого рассчитай стоимость по среднерыночным аукционным ценам и предоставь диапазон «от ... до ...».
+
+ПРАВИЛО: Задавай строго ОДИН уточняющий вопрос за раз — самый важный из оставшихся. Не задавай 2+ вопроса одновременно.
+
 ════════════════════════════════════════════
 ПРИМЕРЫ СТИЛЯ (ориентир тона, не шаблон)
 ════════════════════════════════════════════
@@ -2367,7 +2447,7 @@ PARSED INTENT (структурированный разбор)
       `Клиент хочет расчёт. Действуй так:`,
       `1. Подтверди КОРОТКО все уже известные фильтры (одним предложением).`,
       missing.length > 0
-        ? `2. Спроси ТОЛЬКО недостающее (максимум 2 вопроса): ${missing.slice(0, 2).join("; ")}.`
+        ? `2. Спроси строго ОДИН вопрос — самый важный: ${missing[0]}.`
         : `2. Все параметры собраны — вызови calculate_vehicle_price.`,
       `3. НЕ задавай НИКАКИХ других вопросов. НЕ предлагай альтернативы.`,
     );
@@ -2404,18 +2484,48 @@ PARSED INTENT (структурированный разбор)
   // Use buildCalcParamsFromState directly instead of relying on LLM making the correct tool call
   let autoCalcDone = false;
   if (mergedState.stage === "ready_to_calculate") {
-    const calcParams = buildCalcParamsFromState(mergedState);
-    if (calcParams) {
-      try {
-        const calcResult = await calculateTurnkeyPrice(calcParams);
-        stateContextParts.push(
-          `\n═══ РЕЗУЛЬТАТ РАСЧЁТА (выполнен автоматически) ═══`,
-          JSON.stringify(calcResult, null, 2),
-          `Распиши этот результат клиенту понятно и красиво по-русски. НЕ вызывай calculate_vehicle_price — расчёт уже сделан.`,
-        );
-        autoCalcDone = true;
-      } catch (err) {
-        console.error("❌ Auto-calculate error:", err);
+    const isRangeMode = mergedState.budgetText === "approximate_guidance" && mergedState.auctionPriceJPY == null;
+
+    if (isRangeMode) {
+      // Range calculation: user doesn't know budget — calculate with market price range
+      const rangeParams = buildCalcParamsRange(mergedState);
+      if (rangeParams) {
+        try {
+          const [lowResult, highResult] = await Promise.all([
+            calculateTurnkeyPrice(rangeParams.low),
+            calculateTurnkeyPrice(rangeParams.high),
+          ]);
+          stateContextParts.push(
+            `\n═══ РЕЗУЛЬТАТ РАСЧЁТА ДИАПАЗОНА (выполнен автоматически) ═══`,
+            `Клиент не назвал бюджет — рассчитано по среднерыночным аукционным ценам.`,
+            `Аукционная цена ОТ: ${rangeParams.low.priceJPY.toLocaleString("ru")} йен`,
+            `Результат (нижняя граница):`,
+            JSON.stringify(lowResult, null, 2),
+            `Аукционная цена ДО: ${rangeParams.high.priceJPY.toLocaleString("ru")} йен`,
+            `Результат (верхняя граница):`,
+            JSON.stringify(highResult, null, 2),
+            `Распиши клиенту ДИАПАЗОН стоимости «от ... до ...» понятно и красиво по-русски. Объясни, что точная цена зависит от аукционной стоимости конкретного лота. НЕ вызывай calculate_vehicle_price — расчёт уже сделан. НЕ спрашивай бюджет повторно.`,
+          );
+          autoCalcDone = true;
+        } catch (err) {
+          console.error("❌ Auto-calculate range error:", err);
+        }
+      }
+    } else {
+      // Exact calculation with known auction price
+      const calcParams = buildCalcParamsFromState(mergedState);
+      if (calcParams) {
+        try {
+          const calcResult = await calculateTurnkeyPrice(calcParams);
+          stateContextParts.push(
+            `\n═══ РЕЗУЛЬТАТ РАСЧЁТА (выполнен автоматически) ═══`,
+            JSON.stringify(calcResult, null, 2),
+            `Распиши этот результат клиенту понятно и красиво по-русски. НЕ вызывай calculate_vehicle_price — расчёт уже сделан.`,
+          );
+          autoCalcDone = true;
+        } catch (err) {
+          console.error("❌ Auto-calculate error:", err);
+        }
       }
     }
   }
