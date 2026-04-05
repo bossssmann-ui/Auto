@@ -590,7 +590,7 @@ function buildCalcParamsRange(state: ConversationState): { low: CalcParams; high
 
   let vehicleType: CalcParams["vehicleType"] = "car";
   if (state.volumeCm3 > 1900) {
-    vehicleType = "sanctioned";
+    vehicleType = "special_vehicle";
   }
 
   const range = getMarketPriceRangeJPY(state.volumeCm3, ageYears);
