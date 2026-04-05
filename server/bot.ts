@@ -1649,7 +1649,7 @@ function extractStateUpdate(
 
   // ── Budget parsing ──
   // Detect "don't know the budget" / "show me approximate prices" FIRST
-  const BUDGET_UNKNOWN_RE = /(?:бюджет\s+не\s*знаю|не\s+знаю\s+бюджет|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|жду\s+от\s+(?:тебя|вас)\s+цен|дай\s+ценообразовани|сколько\s+стоит|не\s+знаю\s+цену|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост))/i;
+  const BUDGET_UNKNOWN_RE = /(?:бюджет\s+не\s*знаю|не\s+знаю\s+бюджет|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|жду\s+от\s+(?:тебя|вас)\s+цен|дай\s+ценообразовани[а-яё]|сколько\s+стоит|не\s+знаю\s+цену|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост))/i;
   if (BUDGET_UNKNOWN_RE.test(msg)) {
     update.budgetText = "approximate_guidance";
     update.budgetDeclined = true;
@@ -1659,12 +1659,16 @@ function extractStateUpdate(
     const budgetMatch = msg.match(/(?:бюджет|до)\s+([\d.,]+\s*(?:тыс|тысяч|к|млн|миллион|\d)?[^\n,]*)/i);
     if (budgetMatch && !/лет/i.test(budgetMatch[0])) {
       update.budgetText = budgetMatch[0];
+      // User provided a concrete budget — reset declined flag
+      update.budgetDeclined = false;
     }
   }
   if (!update.budgetText) {
     const budgetMatch2 = msg.match(/(?:в\s+пределах)\s+([\d.,]+[^\n,]*)/i);
     if (budgetMatch2) {
       update.budgetText = budgetMatch2[0];
+      // User provided a concrete budget — reset declined flag
+      update.budgetDeclined = false;
     }
   }
 
