@@ -774,6 +774,39 @@ function replyContradictsState(reply: string, state: ConversationState): boolean
     if (trimQuestions.some(p => lower.includes(p))) return true;
   }
 
+  // 5. If budget is declined (user said "не знаю бюджет"), reply should not re-ask about it
+  if (state.budgetDeclined || state.budgetText === "approximate_guidance") {
+    const budgetQuestions = [
+      "какой бюджет", "какой ориентир по бюджету",
+      "какой бюджет или цена", "какая сумма",
+      "в каком бюджете", "на какую сумму",
+      "сколько готовы потратить", "сколько планируете",
+    ];
+    if (budgetQuestions.some(p => lower.includes(p))) return true;
+  }
+
+  // 6. If nonPassableType known, reply should not re-ask about it
+  if (state.nonPassableType) {
+    const ageQuestions = [
+      "свежий или старый", "до 3 лет или старше 5",
+      "нужен вариант до 3 лет или старше",
+      "свежий (до 3 лет) или старше",
+      "какой непроходной",
+    ];
+    if (ageQuestions.some(p => lower.includes(p))) return true;
+  }
+
+  // 7. If isForResale and isLegalEntity are both known, reply should not re-ask about ownership
+  if (state.isForResale != null && state.isLegalEntity != null) {
+    const ownershipQuestions = [
+      "физлицо или юрлицо", "юрлицо или физлицо",
+      "для перепродажи или для себя", "для себя или для перепродажи",
+      "оформление на физлицо",
+      "физлицо, юрлицо или под перепродажу",
+    ];
+    if (ownershipQuestions.some(p => lower.includes(p))) return true;
+  }
+
   return false;
 }
 
@@ -817,6 +850,7 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
 
   if (state.color) knownParts.push(state.color);
   if (state.budgetText && state.budgetText !== "approximate_guidance") knownParts.push(`бюджет: ${state.budgetText}`);
+  if (state.budgetText === "approximate_guidance" || state.budgetDeclined) knownParts.push("рассчитаю по среднерыночным ценам");
   if (state.auctionPriceJPY) knownParts.push(`аукц. цена: ${state.auctionPriceJPY} йен`);
   if (state.volumeCm3) knownParts.push(`объём: ${state.volumeCm3} см³`);
   if (state.isForResale != null) knownParts.push(state.isForResale ? "для перепродажи" : "для себя");
@@ -1082,13 +1116,20 @@ function applyStateUpdate(
   const { set: current, clearFields } = update;
 
   // ── Intent resolution ──
+  // "price_calc" is sticky: once the user says "посчитай", adding more filters
+  // (which auto-infers "car_search") should NOT downgrade the intent.
+  // Only an explicit new intent (price_calc, auction_explanation) can override.
   const currentIntent = current.activeIntent ?? "other";
-  const effectiveIntent =
-    currentIntent === "other" && previous.model != null
-      ? previous.activeIntent
-      : currentIntent !== "other"
-        ? currentIntent
-        : previous.activeIntent;
+  let effectiveIntent: ConversationState["activeIntent"];
+  if (currentIntent === "other") {
+    // No explicit intent in this message — keep previous
+    effectiveIntent = previous.activeIntent;
+  } else if (currentIntent === "car_search" && previous.activeIntent === "price_calc") {
+    // Don't downgrade price_calc to car_search — user just added more filters
+    effectiveIntent = "price_calc";
+  } else {
+    effectiveIntent = currentIntent;
+  }
 
   // Helper: pick current value if non-null/undefined, otherwise keep previous
   const pick = <T>(prev: T | null, cur: T | null | undefined): T | null =>
@@ -1600,8 +1641,9 @@ function extractStateUpdate(
     update.ageWindow = "passable";
   }
 
-  // Context-aware: standalone "свежий"/"старше"/"до 3 лет" when nonPassableType is pending clarification
-  if (previousState.ageWindow === "non_passable" && !previousState.nonPassableType && !update.nonPassableType && !update.ageWindow) {
+  // Context-aware: standalone "свежий"/"старше"/"до 3 лет" when ageWindow is already non_passable.
+  // Allows overriding a previously set nonPassableType (e.g., user changes from "до 3 лет" to "старше 5 лет").
+  if (previousState.ageWindow === "non_passable" && !update.nonPassableType && !update.ageWindow) {
     if (/(?:свеж|до\s*(?:3\s*(?:-?\s*х)?|тр[её]х)|менее\s*(?:3|тр[её]х)|младше\s*(?:3|тр[её]х)|не\s*старше\s*(?:3|тр[её]х)|молод)/i.test(msg)) {
       update.nonPassableType = "under_3_years";
     } else if (/(?:стар(?:ый)?\s*фонд|стар|больше\s*(?:5|пяти)|более\s*(?:5|пяти)|старше\s*(?:5|пяти)|свыше\s*(?:5|пяти)|от\s*(?:5|пяти)|5\s*\+)/i.test(msg)) {
@@ -1610,8 +1652,9 @@ function extractStateUpdate(
   }
 
   // Standalone nonPassableType detection (even without "непроходной" in this message):
-  // When the user says "до 3 лет" or "от 5 лет" alone, infer both ageWindow + nonPassableType
-  if (!update.ageWindow && !update.nonPassableType && !previousState.nonPassableType) {
+  // When the user says "до 3 лет" or "от 5 лет" alone, infer both ageWindow + nonPassableType.
+  // Also allows overriding a previously set nonPassableType when user explicitly changes their mind.
+  if (!update.ageWindow && !update.nonPassableType) {
     if (/(?:до\s*(?:3\s*(?:-?\s*х)?|тр[её]х)\s*лет|младше\s*(?:3|тр[её]х)(?:\s*лет)?|не\s*старше\s*(?:3|тр[её]х)(?:\s*лет)?|свежи[йея])/i.test(msg)) {
       update.ageWindow = "non_passable";
       update.nonPassableType = "under_3_years";
@@ -1749,7 +1792,7 @@ function extractStateUpdate(
   }
 
   // ── F) Intent parsing ──
-  if (/(?:посчитай|можешь\s+посчитать|расч[её]т|под\s+ключ\s+сколько|сколько\s+будет\s+стоить)/i.test(msg)) {
+  if (/(?:посчитай|можешь\s+посчитать|расч[её]т|под\s+ключ\s+сколько|сколько\s+будет\s+стоить|сколько\s+стоит)/i.test(msg)) {
     update.activeIntent = "price_calc";
   } else if (/(?:что\s+значит|чем\s+(?:\d|R|RA)\S*\s+отличается|что\s+такое\s+(?:оценка|аукцион)|расскажи\s+про\s+оценк)/i.test(msg)) {
     update.activeIntent = "auction_explanation";
@@ -1762,7 +1805,7 @@ function extractStateUpdate(
 
   // ── Budget parsing ──
   // Detect "don't know the budget" / "show me approximate prices" FIRST
-  const BUDGET_UNKNOWN_RE = /(?:бюджет[а-яё]*\s+не\s*знаю|не\s+знаю\s+бюджет[а-яё]*|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост)|жду\s+от\s+(?:тебя|вас)\s+цен|дай\s+ценообразовани|дай\s+цен(?:у|ы|ник)|покажи\s+цен|скажи\s+цен|сколько\s+стоит|не\s+знаю\s+цену|предлагай)/i;
+  const BUDGET_UNKNOWN_RE = /(?:бюджет[а-яё]*\s+не\s*знаю|не\s+знаю\s+бюджет[а-яё]*|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост)|жду\s+от\s+(?:тебя|вас)\s+цен|дай\s+ценообразовани|дай\s+(?:цен(?:у|ы|ник)|стоимост[а-яё]*)|покажи\s+цен|скажи\s+цен|сколько\s+стоит|не\s+знаю\s+цену|предлагай)/i;
   if (BUDGET_UNKNOWN_RE.test(msg)) {
     update.budgetText = "approximate_guidance";
     update.budgetDeclined = true;
