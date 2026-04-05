@@ -1896,7 +1896,7 @@ CALC-CRITICAL FIELDS:
 - "физлицо" / "для себя" → isLegalEntity=false
 
 BUDGET DECLINED RULE:
-- If the user says they don't know the budget, asks for pricing, or requests approximate costs (e.g. "не знаю бюджет", "жду от тебя цену", "сколько стоит", "дай ценообразование", "не знаю цену", "сориентируй по цене") → set budgetDeclined=true and budgetText=null.
+- If the user says they don't know the budget, asks for pricing, or requests approximate costs (e.g. "не знаю бюджет", "жду от тебя цену", "сколько стоит", "дай ценообразование", "не знаю цену", "сориентируй по цене") → set budgetDeclined=true and budgetText="approximate_guidance".
 
 If the message is not about cars at all, return activeIntent="other" with all other fields null/empty.
 Return ONLY the JSON object. No other text.`;
