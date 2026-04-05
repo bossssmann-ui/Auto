@@ -1641,7 +1641,7 @@ function extractStateUpdate(
   if (previousState.ageWindow === "non_passable" && !update.nonPassableType && !update.ageWindow) {
     if (/(?:свеж|помоложе|до\s*(?:3\s*(?:-?\s*х)?|тр[её]х)|менее\s*(?:3|тр[её]х)|младше\s*(?:3|тр[её]х)|не\s*старше\s*(?:3|тр[её]х)|молод)/i.test(msg) && !/не\s+свеж/i.test(msg)) {
       update.nonPassableType = "under_3_years";
-    } else if (/(?:стар(?:ый|ее|ше)?\s*фонд|(?:(?<!не\s)(?<!не\s\s))стар(?:ше|ый|ее|ую|ое)?(?:\s|,|$)|больше\s*(?:5|пяти)|более\s*(?:5|пяти)|старше\s*(?:5|пяти)|свыше\s*(?:5|пяти)|от\s*(?:5|пяти)|5\s*\+)/i.test(msg) && !/не\s+стар/i.test(msg)) {
+    } else if (/(?:стар(?:ый|ее|ше)?\s*фонд|стар(?:ше|ый|ее|ую|ое)?(?:\s|,|$)|больше\s*(?:5|пяти)|более\s*(?:5|пяти)|старше\s*(?:5|пяти)|свыше\s*(?:5|пяти)|от\s*(?:5|пяти)|5\s*\+)/i.test(msg) && !/не\s+стар/i.test(msg)) {
       update.nonPassableType = "over_5_years";
     }
   }
@@ -1830,14 +1830,16 @@ function extractStateUpdate(
 
   // ── Volume parsing ──
   // Handle declined forms: объём, объёмом, объёму, двигатель, двигателем, мотор, мотором, движок
+  // Unit suffix is optional when keyword provides context, but number must be in valid volume range
   const volumeMatch = msg.match(/(?:объ[её]м[а-яё]*|двигател[а-яё]*|мотор[а-яё]*|движ(?:ок|к[а-яё]*))\s*(?:—|-)?\s*([\d.,]+)\s*(?:л(?:итр[а-яё]*)?|куб[а-яё]*|см3|cc)?/i);
   if (volumeMatch) {
     const volStr = volumeMatch[1].replace(",", ".");
     const volNum = parseFloat(volStr);
-    if (volNum > 0 && volNum < 10) {
-      // Likely liters, convert to cm3
+    if (volNum >= 0.6 && volNum < 10) {
+      // Likely liters (0.6L–9.9L), convert to cm3
       update.volumeCm3 = Math.round(volNum * 1000);
-    } else if (volNum >= 100) {
+    } else if (volNum >= 600 && volNum <= 10000) {
+      // Already in cm3 (600–10000)
       update.volumeCm3 = Math.round(volNum);
     }
   }
@@ -1858,10 +1860,9 @@ function extractStateUpdate(
     }
   }
 
-  // Context-aware: bare number when volume is the pending question.
-  // Relaxed: also handles short messages like "1.5 литра" or "1500 кубиков" that earlier regexes missed.
+  // Context-aware: number when volume is the pending question.
+  // Handles short messages like "1.5", "1500", "1.5 литра" when bot just asked about volume.
   if (!update.volumeCm3 && previousState.pendingQuestion && /объ[её]м/i.test(previousState.pendingQuestion)) {
-    // Try strict bare number first (just digits)
     const bareVol = msg.match(/(?:^|\s)([\d]+[.,]?[\d]*)\s*(?:л(?:итр[а-яё]*)?|куб[а-яё]*|см3|cc)?\s*(?:$|[.,!?])/i);
     if (bareVol) {
       const v = parseFloat(bareVol[1].replace(",", "."));
