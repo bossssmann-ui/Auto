@@ -1,6 +1,6 @@
 import { Telegraf } from "telegraf";
 import "dotenv/config";
-import { calculateTurnkeyPrice, type CalcParams } from "./calculator";
+import { calculateTurnkeyPrice, type CalcParams, type CalcResult } from "./calculator";
 import {
   normalizeAutoSlang,
   extractSlangSignals,
@@ -953,6 +953,50 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
   }
 
   return parts.join(" ") || "Расскажите подробнее, что именно вас интересует?";
+}
+
+/** Format a single exact CalcResult as a human-readable Russian reply */
+function formatCalcResultReply(state: ConversationState, result: CalcResult): string {
+  if (!result.success) {
+    return result.message;
+  }
+  const modelName = state.make ? `${state.make} ${state.model}` : state.model ?? "автомобиль";
+  const fmt = (n: number) => n.toLocaleString("ru");
+  const lines: string[] = [];
+  lines.push(`Расчёт стоимости ${modelName} «под ключ»:\n`);
+  lines.push(`• Авто в Японии (с внутренней доставкой): ${fmt(result.japanTotalRub)} ₽`);
+  lines.push(`• Фрахт до Владивостока: ${fmt(result.freightRub)} ₽`);
+  lines.push(`• Таможенная пошлина + акциз + НДС: ${fmt(result.customsDutyRub)} ₽`);
+  lines.push(`• Утилизационный сбор: ${fmt(result.utilFeeRub)} ₽`);
+  lines.push(`• Брокер + СВХ + СБКТС + прочие: ${fmt(result.fixedFeesRub)} ₽`);
+  lines.push(`\n💰 Итого «под ключ» во Владивостоке: ${fmt(result.finalTotalRub)} ₽`);
+  lines.push(`\nЕсли нужно — могу пересчитать с другими параметрами.`);
+  return lines.join("\n");
+}
+
+/** Format a range (low/high) CalcResult pair as a human-readable Russian reply */
+function formatRangeCalcResultReply(
+  state: ConversationState,
+  rangeParams: { low: CalcParams; high: CalcParams },
+  lowResult: CalcResult,
+  highResult: CalcResult,
+): string {
+  const modelName = state.make ? `${state.make} ${state.model}` : state.model ?? "автомобиль";
+  const fmt = (n: number) => n.toLocaleString("ru");
+
+  if (!lowResult.success) return lowResult.message;
+  if (!highResult.success) return highResult.message;
+
+  const lines: string[] = [];
+  lines.push(`Расчёт стоимости ${modelName} «под ключ» по среднерыночным ценам:\n`);
+  lines.push(`Аукционная цена от ${fmt(rangeParams.low.priceJPY)} до ${fmt(rangeParams.high.priceJPY)} йен.\n`);
+  lines.push(`📉 Нижняя граница (${fmt(rangeParams.low.priceJPY)} йен):`);
+  lines.push(`  Итого «под ключ»: ${fmt(lowResult.finalTotalRub)} ₽\n`);
+  lines.push(`📈 Верхняя граница (${fmt(rangeParams.high.priceJPY)} йен):`);
+  lines.push(`  Итого «под ключ»: ${fmt(highResult.finalTotalRub)} ₽`);
+  lines.push(`\nТочная стоимость зависит от аукционной цены конкретного лота.`);
+  lines.push(`Если нужно — могу пересчитать с конкретной ценой.`);
+  return lines.join("\n");
 }
 
 interface ConversationEntry {
@@ -2474,12 +2518,13 @@ PARSED INTENT (структурированный разбор)
 
   // ── Fast-path: deterministic response when parser extracted enough data ──
   // When model is known AND ≥2 filter/preference slots are filled, and we're
-  // still collecting data, use the deterministic response builder directly.
-  // This prevents the LLM from ignoring parsed state and asking generic questions
-  // (the root cause of the "bot is still тупой" production bug).
+  // still collecting data OR ready to calculate, use the deterministic response
+  // builder directly. This prevents the LLM from ignoring parsed state and
+  // asking generic questions, and ensures calculation results are always sent
+  // reliably without depending on the LLM.
   if (
     mergedState.model != null &&
-    (mergedState.stage === "collecting_calc_params" || mergedState.stage === "collecting_filters")
+    (mergedState.stage === "collecting_calc_params" || mergedState.stage === "collecting_filters" || mergedState.stage === "ready_to_calculate")
   ) {
     const filledCount = [
       mergedState.ageWindow != null,
@@ -2500,6 +2545,39 @@ PARSED INTENT (структурированный разбор)
 
     if (filledCount >= 2) {
       console.log(`🔀 Fast-path: deterministic response (${mergedState.make} ${mergedState.model}, ${filledCount} filters)`);
+
+      // When all slots are filled (ready_to_calculate), perform auto-calculation
+      // and send the formatted result directly — no LLM call needed.
+      if (mergedState.stage === "ready_to_calculate" && !mergedState.calculationDone) {
+        try {
+          const isRangeMode = (mergedState.budgetText === "approximate_guidance" || mergedState.budgetDeclined) && mergedState.auctionPriceJPY == null;
+
+          if (isRangeMode) {
+            const rangeParams = buildCalcParamsRange(mergedState);
+            if (rangeParams) {
+              const [lowResult, highResult] = await Promise.all([
+                calculateTurnkeyPrice(rangeParams.low),
+                calculateTurnkeyPrice(rangeParams.high),
+              ]);
+              mergedState.calculationDone = true;
+              mem.state = mergedState;
+              return formatRangeCalcResultReply(mergedState, rangeParams, lowResult, highResult);
+            }
+          } else {
+            const calcParams = buildCalcParamsFromState(mergedState);
+            if (calcParams) {
+              const calcResult = await calculateTurnkeyPrice(calcParams);
+              mergedState.calculationDone = true;
+              mem.state = mergedState;
+              return formatCalcResultReply(mergedState, calcResult);
+            }
+          }
+        } catch (err) {
+          console.error("❌ Fast-path auto-calculate error:", err);
+          // Fall through to LLM path if fast-path calculation fails
+        }
+      }
+
       const plan = planReply(mergedState, userMessage);
       return buildSafeFallbackReply(mergedState, plan);
     }
