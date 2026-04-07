@@ -150,6 +150,7 @@ interface ConversationState {
   auctionGradesAllowed: string[];
 
   budgetText: string | null;
+  budgetDeclined: boolean;
   auctionPriceJPY: number | null;
   volumeCm3: number | null;
 
@@ -187,6 +188,7 @@ const DEFAULT_CONVERSATION_STATE: ConversationState = {
   auctionGradeMin: null,
   auctionGradesAllowed: [],
   budgetText: null,
+  budgetDeclined: false,
   auctionPriceJPY: null,
   volumeCm3: null,
   isForResale: null,
@@ -623,7 +625,7 @@ function replyContradictsState(reply: string, state: ConversationState): boolean
  * Confirms known slots and asks only calc-critical missing fields.
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-function buildSafeFallbackReply(state: ConversationState, _plan: string[]): string {
+async function buildSafeFallbackReply(state: ConversationState, _plan: string[]): Promise<string> {
   const parts: string[] = [];
 
   // ── Collect known filter descriptions ──
@@ -687,7 +689,7 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
     if (!state.year && !state.ageWindow) {
       missingQuestions.push("какой год или возрастное окно");
     }
-    if (!state.auctionPriceJPY && !state.budgetText) {
+    if (!state.auctionPriceJPY && !state.budgetText && !state.budgetDeclined) {
       missingQuestions.push("какая цена на аукционе в йенах или бюджет");
     }
     if (!state.volumeCm3) {
@@ -712,12 +714,40 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
   }
 
   if (missingQuestions.length > 0) {
-    parts.push(`Уточни только: ${missingQuestions.join(", ")}.`);
-  } else if (state.stage === "ready_to_calculate") {
-    parts.push("Все данные есть, сейчас посчитаю.");
+    parts.push(`Уточни, пожалуйста: ${missingQuestions[0]}.`);
+    return parts.join("\n\n");
   }
 
-  return parts.join(" ") || "Расскажите подробнее, что именно вас интересует?";
+  // All slots filled — trigger price calculation
+  if (state.activeIntent === "price_calc" && state.model && state.volumeCm3) {
+    const calcParams = buildCalcParamsFromState(state);
+    if (calcParams) {
+      try {
+        const calcResult = await calculateTurnkeyPrice(calcParams);
+        if (calcResult.success) {
+          const fmt = (n: number) => Math.round(n).toLocaleString("ru-RU");
+          parts.push(
+            `💰 Расчёт «под ключ»:\n` +
+            `• Авто по курсу ЦБ: ${fmt(calcResult.japanTotalRub)} ₽\n` +
+            `• Доставка: ${fmt(calcResult.freightRub)} ₽\n` +
+            `• Таможенная пошлина: ${fmt(calcResult.customsDutyRub)} ₽\n` +
+            `• Утилизационный сбор: ${fmt(calcResult.utilFeeRub)} ₽\n` +
+            `• Фиксированные сборы: ${fmt(calcResult.fixedFeesRub)} ₽\n` +
+            `══════════════════\n` +
+            `Итого: ${fmt(calcResult.finalTotalRub)} ₽`,
+          );
+          return parts.join("\n\n");
+        } else {
+          parts.push(calcResult.message);
+          return parts.join("\n\n");
+        }
+      } catch (err) {
+        console.error("❌ buildSafeFallbackReply auto-calc error:", err);
+      }
+    }
+  }
+
+  return parts.join("\n\n") || "Расскажите подробнее, что именно вас интересует?";
 }
 
 interface ConversationEntry {
@@ -971,6 +1001,7 @@ function applyStateUpdate(
     auctionGradeMin: pick(base.auctionGradeMin, current.auctionGradeMin),
     auctionGradesAllowed: mergeArrays(base.auctionGradesAllowed, current.auctionGradesAllowed),
     budgetText: pick(base.budgetText, current.budgetText),
+    budgetDeclined: base.budgetDeclined || current.budgetDeclined || false,
     auctionPriceJPY: pick(base.auctionPriceJPY, current.auctionPriceJPY),
     volumeCm3: pick(base.volumeCm3, current.volumeCm3),
     isForResale: pick(base.isForResale, current.isForResale),
@@ -2342,7 +2373,7 @@ async function getAIResponse(chatId: number, userMessage: string): Promise<strin
     ) {
       console.warn("⚠️ Reply contradicts parsed state — using deterministic fallback");
       const plan = planReply(mem.state, userMessage);
-      reply = buildSafeFallbackReply(mem.state, plan);
+      reply = await buildSafeFallbackReply(mem.state, plan);
     }
 
     // Save user + assistant messages to history only on success
