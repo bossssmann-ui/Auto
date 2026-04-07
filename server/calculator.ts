@@ -1,5 +1,5 @@
 export interface CalcParams {
-  vehicleType: 'car' | 'jeep' | 'moto' | 'special' | 'sanctioned';
+  vehicleType: 'car' | 'jeep' | 'moto' | 'special' | 'special_vehicle';
   priceJPY: number;
   volumeCm3: number;
   ageYears: number;
@@ -193,11 +193,11 @@ function calcMotoDutyEur(): number {
 export async function calculateTurnkeyPrice(params: CalcParams): Promise<CalcResult> {
   const { vehicleType, priceJPY, volumeCm3, ageYears, isForResale, isLegalEntity } = params;
 
-  if (vehicleType === 'special' || vehicleType === 'sanctioned') {
+  if (vehicleType === 'special' || vehicleType === 'special_vehicle') {
     return {
       success: false,
       requireHuman: true,
-      message: 'Расчет спецтехники и санкционных авто только по запросу. Перевожу на оператора.',
+      message: 'Расчёт спецтехники и авто с нестандартной логистикой только по запросу. Перевожу на оператора.',
     };
   }
 

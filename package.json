@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "dev:bot": "tsx server/bot.ts"
+    "dev:bot": "tsx server/bot.ts",
+    "test:bot": "BOT_TEST_MODE=1 tsx server/bot.test.ts"
   },
   "dependencies": {
     "cors": "^2.8.6",
