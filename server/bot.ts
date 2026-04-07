@@ -811,7 +811,7 @@ function replyContradictsState(reply: string, state: ConversationState): boolean
  * Confirms known slots and asks only calc-critical missing fields.
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-function buildSafeFallbackReply(state: ConversationState, _plan: string[]): string {
+async function buildSafeFallbackReply(state: ConversationState, _plan: string[]): Promise<string> {
   const parts: string[] = [];
 
   // ── Collect known filter descriptions ──
@@ -952,7 +952,7 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
     parts.push("Все данные есть, сейчас посчитаю.");
   }
 
-  return parts.join(" ") || "Расскажите подробнее, что именно вас интересует?";
+  return parts.join("\n\n") || "Расскажите подробнее, что именно вас интересует?";
 }
 
 /** Format a single exact CalcResult as a human-readable Russian reply */
@@ -2914,7 +2914,7 @@ async function getAIResponse(chatId: number, userMessage: string): Promise<strin
     ) {
       console.warn("⚠️ Reply contradicts parsed state — using deterministic fallback");
       const plan = planReply(mem.state, userMessage);
-      reply = buildSafeFallbackReply(mem.state, plan);
+      reply = await buildSafeFallbackReply(mem.state, plan);
     }
 
     // Save user + assistant messages to history only on success
