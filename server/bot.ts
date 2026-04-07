@@ -2578,8 +2578,12 @@ PARSED INTENT (структурированный разбор)
         }
       }
 
-      const plan = planReply(mergedState, userMessage);
-      return buildSafeFallbackReply(mergedState, plan);
+      if (buildCalcParamsFromState(mergedState) !== null) {
+        // All calc slots are filled — skip fallback, let auto-calc at line ~2667 run
+      } else {
+        const plan = planReply(mergedState, userMessage);
+        return buildSafeFallbackReply(mergedState, plan);
+      }
     }
   }
 
