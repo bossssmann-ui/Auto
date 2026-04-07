@@ -528,11 +528,10 @@ function buildCalcParamsFromState(state: ConversationState): CalcParams | null {
   }
   if (ageYears == null) return null;
 
-  // Determine vehicle type
-  let vehicleType: CalcParams["vehicleType"] = "car";
-  if (state.volumeCm3 > 1900) {
-    vehicleType = "special_vehicle";
-  }
+  // Vehicle type: always "car" for standard passenger vehicles.
+  // "special_vehicle" / "special" should only be set via explicit user intent
+  // (heavy machinery, construction equipment), not derived from engine volume.
+  const vehicleType: CalcParams["vehicleType"] = "car";
 
   return {
     vehicleType,
@@ -590,10 +589,9 @@ function buildCalcParamsRange(state: ConversationState): { low: CalcParams; high
   }
   if (ageYears == null) return null;
 
-  let vehicleType: CalcParams["vehicleType"] = "car";
-  if (state.volumeCm3 > 1900) {
-    vehicleType = "special_vehicle";
-  }
+  // Vehicle type: always "car" for standard passenger vehicles.
+  // "special_vehicle" / "special" should only be set via explicit user intent.
+  const vehicleType: CalcParams["vehicleType"] = "car";
 
   const range = getMarketPriceRangeJPY(state.volumeCm3, ageYears);
 
