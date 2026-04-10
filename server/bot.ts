@@ -288,6 +288,96 @@ function deriveImpliedState(
       state.slotMeta.nonPassableType = { source: "derived", confidence: "high", turnIndex: state.turnIndex };
     }
   }
+
+  // When ageWindow is explicitly non_passable but nonPassableType is unknown,
+  // and we have a year — derive nonPassableType from the year.
+  // Example: "непроходной" + "2018 год" → 8 years old → over_5_years
+  if (state.year && state.ageWindow === "non_passable" && !state.nonPassableType) {
+    const currentYear = new Date().getFullYear();
+    const age = currentYear - state.year;
+    state.nonPassableType = age < 3 ? "under_3_years" : "over_5_years";
+    state.slotMeta.nonPassableType = { source: "derived", confidence: "high", turnIndex: state.turnIndex };
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// CALC-CRITICAL FIELDS — single source of truth
+// ══════════════════════════════════════════════════════════
+//
+// These are the fields required for ANY vehicle price calculation.
+// The list is model-independent: Prius, Probox, Camry, Nissan X-Trail —
+// all go through the same check.
+//
+// Fields:
+//   1. model          — which car (make is derived)
+//   2. year/ageWindow — vehicle age (year OR age window: passable/non-passable)
+//       2a. nonPassableType — required when ageWindow=non_passable
+//   3. volumeCm3      — engine displacement
+//   4. isForResale     — personal use or resale (affects customs duty)
+//   5. isLegalEntity   — individual or legal entity (affects customs duty)
+//   6. price/budget    — auctionPriceJPY OR budgetText/budgetDeclined (for range mode)
+//
+// NOT calc-critical: drivetrain, trimLevel, mileage, grade, color, etc.
+// Those are search/filter parameters only.
+// ══════════════════════════════════════════════════════════
+
+interface MissingCalcField {
+  field: string;
+  question: string;
+}
+
+/**
+ * Centralized check: returns the list of missing calc-critical fields.
+ * Empty array = all fields present = ready to calculate.
+ * Works for ANY model/intent — universal, not tied to specific cars.
+ */
+function getMissingCalcCriticalFields(state: ConversationState): MissingCalcField[] {
+  const missing: MissingCalcField[] = [];
+
+  if (!state.model) {
+    missing.push({ field: "model", question: "какую модель рассматриваете" });
+  }
+
+  // Age: need either an explicit year OR an age window
+  if (state.year == null && state.ageWindow == null) {
+    missing.push({ field: "yearOrAge", question: "какой год или возрастная категория" });
+  }
+
+  // If non-passable age window, must specify which kind
+  if (state.ageWindow === "non_passable" && !state.nonPassableType) {
+    missing.push({ field: "nonPassableType", question: "нужен вариант до 3 лет или старше 5 лет" });
+  }
+
+  // Engine volume
+  if (state.volumeCm3 == null) {
+    missing.push({ field: "volumeCm3", question: "какой объём двигателя" });
+  }
+
+  // Ownership: isForResale + isLegalEntity
+  if (state.isForResale == null && state.isLegalEntity == null) {
+    missing.push({ field: "ownership", question: "оформление на физлицо, юрлицо или под перепродажу" });
+  } else {
+    if (state.isForResale == null) {
+      missing.push({ field: "isForResale", question: "для перепродажи или для себя" });
+    }
+    if (state.isLegalEntity == null) {
+      missing.push({ field: "isLegalEntity", question: "физлицо или юрлицо" });
+    }
+  }
+
+  // Price/budget: either explicit auction price, approximate_guidance, or budgetDeclined
+  if (state.auctionPriceJPY == null && !state.budgetText && !state.budgetDeclined) {
+    missing.push({ field: "priceOrBudget", question: "какой бюджет или цена покупки в йенах" });
+  }
+
+  return missing;
+}
+
+/**
+ * Convenience: are ALL calc-critical fields present?
+ */
+function hasAllCalcCriticalFields(state: ConversationState): boolean {
+  return getMissingCalcCriticalFields(state).length === 0;
 }
 
 /**
@@ -306,25 +396,21 @@ function computeNeedsClarification(state: ConversationState): string[] {
   }
 
   if (state.activeIntent === "price_calc") {
-    if (state.auctionPriceJPY == null && !state.budgetText && !state.budgetDeclined) {
-      missing.push("priceOrBudget");
-    }
-    if (state.volumeCm3 == null) {
-      missing.push("volumeCm3");
-    }
-    if (state.year == null && state.ageWindow == null) {
-      missing.push("yearOrAgeWindow");
-    }
-    if (state.isForResale == null) {
-      missing.push("isForResale");
-    }
-    if (state.isLegalEntity == null) {
-      missing.push("isLegalEntity");
+    // Use centralized calc-critical check
+    for (const m of getMissingCalcCriticalFields(state)) {
+      if (!missing.includes(m.field)) {
+        missing.push(m.field);
+      }
     }
   }
 
   return missing;
 }
+
+/**
+ * Derive conversation stage from current state.
+ * Uses centralized calc-critical field check for ready_to_calculate.
+ */
 function deriveStage(state: ConversationState): ConversationStage {
   if (state.activeIntent === "other" && !state.model) {
     return "idle";
@@ -335,19 +421,8 @@ function deriveStage(state: ConversationState): ConversationStage {
   }
 
   if (state.activeIntent === "price_calc") {
-    // ready_to_calculate ONLY if ALL required calc fields exist
-    const hasModel = !!state.model;
-    const hasPrice = state.auctionPriceJPY != null;
-    const hasBudgetGuidance = state.budgetText === "approximate_guidance" || state.budgetDeclined;
-    const hasVolume = state.volumeCm3 != null;
-    const hasAge = state.year != null || state.ageWindow != null;
-    const hasResale = state.isForResale != null;
-    const hasEntity = state.isLegalEntity != null;
-    const nonPassableOk =
-      state.ageWindow !== "non_passable" || state.nonPassableType != null;
-
-    // Allow ready_to_calculate with approximate_guidance (price range mode)
-    if (hasModel && (hasPrice || hasBudgetGuidance) && hasVolume && hasAge && hasResale && hasEntity && nonPassableOk) {
+    // ready_to_calculate ONLY when ALL calc-critical fields are present
+    if (hasAllCalcCriticalFields(state)) {
       return "ready_to_calculate";
     }
     return "collecting_calc_params";
@@ -630,32 +705,13 @@ function planReply(state: ConversationState, _userMessage: string): string[] {
     hints.push(`Модель определена: ${state.make ?? ""} ${state.model}. НЕ спрашивай бренд/модель/тип.`);
   }
 
-  // Collect missing critical fields (max 1 — strictly one question at a time)
+  // Collect missing critical fields using centralized check (max 1 question at a time)
   const missingCritical: string[] = [];
 
   if (state.activeIntent === "price_calc") {
-    // Priority 1: nonPassableType — blocks age computation and is quick to answer
-    if (state.ageWindow === "non_passable" && state.nonPassableType == null) {
-      missingCritical.push("непроходной: свежий (до 3 лет) или старый (старше 5 лет)");
-    }
-    if (state.year == null && state.ageWindow == null) {
-      missingCritical.push("год выпуска или возрастное окно");
-    }
-    // Priority 2: volumeCm3
-    if (state.volumeCm3 == null) {
-      missingCritical.push("объём двигателя");
-    }
-    // Priority 3: isForResale / isLegalEntity (calc-critical: affects customs duty)
-    if (state.isForResale == null) {
-      missingCritical.push("для перепродажи или нет");
-    }
-    if (state.isLegalEntity == null) {
-      missingCritical.push("физлицо или юрлицо");
-    }
-    // Priority 4: budget — LAST and skipped if budgetDeclined
-    // NOTE: drivetrain is NOT calc-critical — asked only for car_search intent
-    if (state.auctionPriceJPY == null && !state.budgetText && !state.budgetDeclined) {
-      missingCritical.push("бюджет или аукционная цена в йенах");
+    const missingCalc = getMissingCalcCriticalFields(state);
+    for (const m of missingCalc) {
+      missingCritical.push(m.question);
     }
   } else if (state.activeIntent === "car_search") {
     if (!state.model && !state.make) {
@@ -896,36 +952,19 @@ async function buildSafeFallbackReply(state: ConversationState, _plan: string[])
     parts.push(`Понял: ${knownParts.join(", ")}.`);
   }
 
-  // ── Build missing calc-critical fields ──
-  const missingQuestions: string[] = [];
+  // ── Build missing calc-critical fields (centralized) ──
+  //
+  // UNIVERSAL RULE: "Сейчас рассчитаю" is ONLY allowed when
+  // hasAllCalcCriticalFields(state) === true. Otherwise, ask the
+  // top-priority missing question. This works for ANY car model.
   const isBudgetGuidanceMode = state.budgetText === "approximate_guidance" || state.budgetDeclined;
+  const missingCalcFields = getMissingCalcCriticalFields(state);
+  const missingQuestions: string[] = [];
 
-  // When budget guidance mode is active, ALWAYS check calc-critical fields
-  // regardless of activeIntent. This prevents the bot from promising "рассчитаю"
-  // when any calc-critical field (volume, age, ownership, etc.) is still missing.
+  // When in price_calc mode OR budget guidance is active, use centralized check
   if (isBudgetGuidanceMode || state.activeIntent === "price_calc") {
-    // Priority 1: nonPassableType
-    if (state.ageWindow === "non_passable" && !state.nonPassableType) {
-      missingQuestions.push("нужен вариант до 3 лет или старше 5 лет");
-    }
-    if (!state.year && !state.ageWindow) {
-      missingQuestions.push("какой год или возрастная категория");
-    }
-    // Priority 2: volumeCm3
-    if (!state.volumeCm3) {
-      missingQuestions.push("какой объём двигателя");
-    }
-    // Priority 3: isForResale / isLegalEntity (calc-critical: affects customs duty)
-    if (state.isForResale == null && state.isLegalEntity == null) {
-      missingQuestions.push("оформление на физлицо, юрлицо или под перепродажу");
-    } else {
-      if (state.isForResale == null) missingQuestions.push("для перепродажи или для себя");
-      if (state.isLegalEntity == null) missingQuestions.push("физлицо или юрлицо");
-    }
-    // Priority 4: budget — LAST and skipped if budgetDeclined
-    // NOTE: drivetrain is NOT calc-critical (doesn't affect price) — asked only for car_search
-    if (!state.auctionPriceJPY && !state.budgetText && !state.budgetDeclined) {
-      missingQuestions.push("какой бюджет или цена покупки в йенах");
+    for (const m of missingCalcFields) {
+      missingQuestions.push(m.question);
     }
   } else if (state.activeIntent === "car_search") {
     if (!state.model && !state.make) {
@@ -939,20 +978,23 @@ async function buildSafeFallbackReply(state: ConversationState, _plan: string[])
     }
   }
 
-  if (isBudgetGuidanceMode && missingQuestions.length === 0) {
-    if (state.calculationDone) {
-      parts.push("Расчёт по среднерыночным ценам уже выполнен. Если хотите уточнить — напишите новые параметры.");
-    } else {
-      // All other slots are filled — auto-calculate with market price range
-      parts.push("Сейчас рассчитаю по среднерыночным ценам и дам диапазон стоимости.");
-    }
-  } else if (missingQuestions.length > 0) {
-    // Strictly ONE question at a time
+  if (missingQuestions.length > 0) {
+    // NOT ready — ask strictly ONE question at a time.
+    // NEVER say "Сейчас рассчитаю" when fields are missing.
     parts.push(`Уточни, пожалуйста: ${missingQuestions[0]}.`);
   } else if (state.calculationDone) {
-    parts.push("Расчёт уже выполнен. Если хотите пересчитать с другими параметрами — напишите новые данные.");
-  } else if (state.stage === "ready_to_calculate") {
-    parts.push("Все данные есть, сейчас посчитаю.");
+    if (isBudgetGuidanceMode) {
+      parts.push("Расчёт по среднерыночным ценам уже выполнен. Если хотите уточнить — напишите новые параметры.");
+    } else {
+      parts.push("Расчёт уже выполнен. Если хотите пересчитать с другими параметрами — напишите новые данные.");
+    }
+  } else if (hasAllCalcCriticalFields(state)) {
+    // ALL fields present — safe to promise calculation
+    if (isBudgetGuidanceMode) {
+      parts.push("Сейчас рассчитаю по среднерыночным ценам и дам диапазон стоимости.");
+    } else {
+      parts.push("Все данные есть, сейчас посчитаю.");
+    }
   }
 
   return parts.join("\n\n") || "Расскажите подробнее, что именно вас интересует?";
@@ -1764,15 +1806,15 @@ function extractStateUpdate(
   }
 
   // Resale / legal entity
-  // "для себя" implies both personal use (not for resale) and physical entity
-  if (/(?:для\s+себя)/i.test(msg)) {
+  // "для себя" / "в семью" implies both personal use (not for resale) and physical entity
+  if (/(?:для\s+себя|в\s+семью|для\s+семьи|себе\s+(?:авто|машин[а-яё]*))/i.test(msg)) {
     update.isForResale = false;
     update.isLegalEntity = false;
   }
   // Check negation BEFORE positive to avoid "не для перепродажи" matching positive
   if (/(?:не\s+(?:для\s+)?перепродаж|не\s+на\s+продажу|не\s+для\s+продажи)/i.test(msg)) {
     update.isForResale = false;
-  } else if (/(?:перепродаж|на\s+продажу|для\s+продажи)/i.test(msg)) {
+  } else if (/(?:перепродаж|на\s+продажу|для\s+продажи|под\s+продажу|под\s+перепродажу)/i.test(msg)) {
     update.isForResale = true;
   }
   if (/(?:юрлиц|юр\.\s*лиц|для\s+компании|(?<![а-яёА-ЯЁa-zA-Z0-9])ооо(?![а-яёА-ЯЁa-zA-Z0-9])|(?<![а-яёА-ЯЁa-zA-Z0-9])ип(?![а-яёА-ЯЁa-zA-Z0-9]))/i.test(msg)) {
@@ -1842,7 +1884,8 @@ function extractStateUpdate(
   }
 
   // ── F) Intent parsing ──
-  if (/(?:посчитай|можешь\s+посчитать|расч[её]т|под\s+ключ\s+сколько|сколько\s+будет\s+стоить|сколько\s+стоит)/i.test(msg)) {
+  // "считай", "рассчитай", "посчитай", "можешь посчитать", "расчёт", "под ключ сколько", etc.
+  if (/(?:посчитай|рассчитай|считай|можешь\s+посчитать|расч[её]т|под\s+ключ\s+сколько|сколько\s+будет\s+стоить|сколько\s+стоит|сколько\s+выйдет|почем|почём|во\s+сколько)/i.test(msg)) {
     update.activeIntent = "price_calc";
   } else if (/(?:что\s+значит|чем\s+(?:\d|R|RA)\S*\s+отличается|что\s+такое\s+(?:оценка|аукцион)|расскажи\s+про\s+оценк)/i.test(msg)) {
     update.activeIntent = "auction_explanation";
@@ -1857,7 +1900,8 @@ function extractStateUpdate(
   // Detect "don't know the budget" / "show me approximate prices" FIRST
   // Note: не\s*знаю (optional space) matches both "не знаю" and "незнаю" (common typo).
   // "средн* стоимост*" / "как* стоимост*" match all declensions of price inquiry phrases.
-  const BUDGET_UNKNOWN_RE = /(?:бюджет[а-яё]*\s+не\s*знаю|не\s*знаю\s+бюджет[а-яё]*|цен[а-яё]*\s+не\s*знаю|не\s*знаю\s+цен|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s*знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост)|жду\s+от\s+(?:тебя|вас)\s+цен|дай\s+ценообразовани|дай\s+(?:цен(?:у|ы|ник)|стоимост[а-яё]*)|покажи\s+цен|скажи\s+цен|сколько\s+стоит|не\s*знаю\s+цену|предлагай|средн[а-яё]*\s+(?:стоимост|цен[а-яё]*)|как(?:ая|ой|ое)\s+(?:стоимост|цен[а-яё]*))/i;
+  // Extended coverage: "прицениться", "по нормальной цене", "хз по бюджету", "фиг знает" etc.
+  const BUDGET_UNKNOWN_RE = /(?:бюджет[а-яё]*\s+не\s*знаю|не\s*знаю\s+бюджет[а-яё]*|цен[а-яё]*\s+не\s*знаю|не\s*знаю\s+цен|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s*знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост)|жду\s+от\s+(?:тебя|вас)\s+цен|дай\s+ценообразовани|дай\s+(?:цен(?:у|ы|ник)|стоимост[а-яё]*)|покажи\s+цен|скажи\s+цен|сколько\s+стоит|не\s*знаю\s+цену|предлагай|средн[а-яё]*\s+(?:стоимост|цен[а-яё]*)|как(?:ая|ой|ое)\s+(?:стоимост|цен[а-яё]*)|прицени(?:ть|сь|тесь)|по\s+(?:нормальн[а-яё]*|рыночн[а-яё]*|адекватн[а-яё]*)\s+(?:цен[а-яё]*|стоимост)|какая\s+вилка|что\s+по\s+(?:ценам|деньгам|стоимости)|во\s+(?:что|сколько)\s+(?:обойд[её]тся|выйдет|встанет)|посчитай\s+по\s+(?:нормальн|средн|рыночн)|назови\s+(?:цену|сумму|стоимость)|фиг\s+(?:его\s+)?знает\s+(?:бюджет|цен|стоимост))/i;
   if (BUDGET_UNKNOWN_RE.test(msg)) {
     update.budgetText = "approximate_guidance";
     update.budgetDeclined = true;
@@ -1867,9 +1911,10 @@ function extractStateUpdate(
     update.activeIntent = "price_calc";
   }
 
-  // Context-aware budget decline: bare "незнаю" / "не знаю" / "хз" when bot just asked about budget
+  // Context-aware budget decline: bare "незнаю" / "не знаю" / "хз" / "фиг знает" etc.
+  // when bot just asked about budget/price. Robust against all common typos and slang.
   if (!update.budgetText && previousState.pendingQuestion && /(?:бюджет|цен|стоимост)/i.test(previousState.pendingQuestion)) {
-    if (/^(?:не\s*знаю|незнаю|хз|без\s+понятия|понятия\s+не\s+имею|не\s+в\s+курсе)\s*[.!?]?\s*$/i.test(msg.trim())) {
+    if (/^(?:не\s*знаю|незнаю|хз|хуй\s+знает|фиг\s+(?:его\s+)?знает|без\s+понятия|понятия\s+не\s+имею|не\s+в\s+курсе|нз|без\s+бюджета|нет\s+бюджета|сам\s+не\s+знаю|да\s+хз|не\s+определился|не\s+решил[аи]?|предлагай|сориентируй|посоветуй|подскажи)\s*[.!?]?\s*$/i.test(msg.trim())) {
       update.budgetText = "approximate_guidance";
       update.budgetDeclined = true;
       update.activeIntent = "price_calc";
@@ -1892,9 +1937,24 @@ function extractStateUpdate(
   }
 
   // ── Mileage parsing ──
+  // Standard: "пробег до 100 тысяч"
   const mileageMatch = msg.match(/(?:пробег\s+(?:до|не\s+более|максимум)\s+[\d.,]+\s*(?:тыс|к|км)?[^\n,]*)/i);
   if (mileageMatch) {
     update.mileageText = mileageMatch[0];
+  }
+  // Slang: "до сотки пробега" / "до 100к пробега" / "до 100 тысяч км"
+  if (!update.mileageText) {
+    const mileageSlang = msg.match(/(?:до\s+сотки|до\s+сотни)\s*(?:пробег[а-яё]*|км)?/i);
+    if (mileageSlang) {
+      update.mileageText = "до 100 тыс. км";
+    }
+  }
+  if (!update.mileageText) {
+    // "до 100к пробега" / "до 80 тысяч пробег"
+    const mileageKm = msg.match(/до\s+([\d.,]+)\s*(?:к|тыс(?:яч)?)\s*(?:км|пробег[а-яё]*)/i);
+    if (mileageKm) {
+      update.mileageText = `до ${mileageKm[1]} тыс. км`;
+    }
   }
 
   // ── Volume parsing ──
@@ -1939,6 +1999,19 @@ function extractStateUpdate(
         update.volumeCm3 = Math.round(v * 1000);
       } else if (v >= 100 && v <= 10000) {
         update.volumeCm3 = Math.round(v);
+      }
+    }
+  }
+
+  // Volume heuristic: bare decimal after model name (e.g., "камри 2.5", "пробокс 1.5")
+  // Common Russian car market pattern — number after model refers to engine displacement.
+  // Only triggers when a model was matched in this message and number looks like volume (0.6-9.9).
+  if (!update.volumeCm3 && (update.model || update.make)) {
+    const bareDecimal = msg.match(/\b(\d[.,]\d)\b/);
+    if (bareDecimal) {
+      const v = parseFloat(bareDecimal[1].replace(",", "."));
+      if (v >= 0.6 && v < 10) {
+        update.volumeCm3 = Math.round(v * 1000);
       }
     }
   }
@@ -2993,6 +3066,8 @@ export {
   applyStateUpdate as _test_applyStateUpdate,
   buildSafeFallbackReply as _test_buildSafeFallbackReply,
   planReply as _test_planReply,
+  getMissingCalcCriticalFields as _test_getMissingCalcCriticalFields,
+  hasAllCalcCriticalFields as _test_hasAllCalcCriticalFields,
   DEFAULT_CONVERSATION_STATE as _test_DEFAULT_CONVERSATION_STATE,
 };
 export type { ConversationState as _test_ConversationState };
