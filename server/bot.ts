@@ -2513,6 +2513,7 @@ PARSED INTENT (структурированный разбор)
   }
 
   // Step 3: apply update to persistent state (includes derive, stage transition, pending question)
+  const previousState = { ...mem.state };
   const mergedState = applyStateUpdate(mem.state, combinedUpdate, mergeSource);
   mem.state = mergedState;
 
@@ -2735,6 +2736,15 @@ PARSED INTENT (структурированный разбор)
       role: "system" as const,
       content: stateContextParts.join("\n"),
     });
+  }
+
+  // ── Reset autoCalcDone if auction price changed this turn ──
+  if (
+    previousState &&
+    mergedState.auctionPriceJPY &&
+    mergedState.auctionPriceJPY !== previousState.auctionPriceJPY
+  ) {
+    autoCalcDone = false;
   }
 
   // ── Determine if tools should be included ──
