@@ -925,14 +925,34 @@ async function buildSafeFallbackReply(state: ConversationState, _plan: string[])
       missingQuestions.push("какой бюджет или цена покупки в йенах");
     }
   } else if (state.activeIntent === "car_search") {
-    if (!state.model && !state.make) {
-      missingQuestions.push("какая модель или марка");
-    }
-    if (!state.year && !state.ageWindow) {
-      missingQuestions.push("какой возраст или год");
-    }
-    if (!state.budgetText && !state.budgetDeclined) {
-      missingQuestions.push("какой бюджет");
+    // When budget guidance mode is active, also check calc-critical fields
+    // (defense-in-depth: prevents promising calculation with missing fields)
+    if (isBudgetGuidanceMode) {
+      if (state.ageWindow === "non_passable" && !state.nonPassableType) {
+        missingQuestions.push("нужен вариант до 3 лет или старше 5 лет");
+      }
+      if (!state.year && !state.ageWindow) {
+        missingQuestions.push("какой год или возрастная категория");
+      }
+      if (!state.volumeCm3) {
+        missingQuestions.push("какой объём двигателя");
+      }
+      if (state.isForResale == null && state.isLegalEntity == null) {
+        missingQuestions.push("оформление на физлицо, юрлицо или под перепродажу");
+      } else {
+        if (state.isForResale == null) missingQuestions.push("для перепродажи или для себя");
+        if (state.isLegalEntity == null) missingQuestions.push("физлицо или юрлицо");
+      }
+    } else {
+      if (!state.model && !state.make) {
+        missingQuestions.push("какая модель или марка");
+      }
+      if (!state.year && !state.ageWindow) {
+        missingQuestions.push("какой возраст или год");
+      }
+      if (!state.budgetText && !state.budgetDeclined) {
+        missingQuestions.push("какой бюджет");
+      }
     }
   }
 
@@ -1010,15 +1030,17 @@ const conversations = new Map<number, ConversationEntry>();
 const MAX_RECENT_MESSAGES = 6; // 3 user/assistant pairs
 const CONVERSATION_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-/** Evict stale conversations periodically */
-setInterval(() => {
-  const now = Date.now();
-  for (const [userId, entry] of conversations) {
-    if (now - entry.lastActivity > CONVERSATION_TTL_MS) {
-      conversations.delete(userId);
+/** Evict stale conversations periodically (skip in test mode to avoid hanging) */
+if (!isTestMode) {
+  setInterval(() => {
+    const now = Date.now();
+    for (const [userId, entry] of conversations) {
+      if (now - entry.lastActivity > CONVERSATION_TTL_MS) {
+        conversations.delete(userId);
+      }
     }
-  }
-}, 10 * 60 * 1000); // every 10 minutes
+  }, 10 * 60 * 1000); // every 10 minutes
+}
 
 function getMemory(userId: number): ConversationEntry {
   let entry = conversations.get(userId);
@@ -1601,6 +1623,8 @@ function extractStateUpdate(
   if (slangSignals.budgetGuidance) {
     update.budgetText = "approximate_guidance";
     update.budgetDeclined = true;
+    // Requesting pricing implies price_calc intent
+    update.activeIntent = "price_calc";
   }
   if (sellerClaims.length > 0) {
     update.sellerClaims = sellerClaims;
@@ -1769,6 +1793,8 @@ function extractStateUpdate(
     update.isLegalEntity = true;
   } else if (/(?:физлиц|физ\.\s*лиц)/i.test(msg)) {
     update.isLegalEntity = false;
+    // "физлицо" (individual person) implies personal use, not resale
+    update.isForResale = false;
   }
 
   // ── C) Auction grade parsing ──
@@ -1847,6 +1873,10 @@ function extractStateUpdate(
   if (BUDGET_UNKNOWN_RE.test(msg)) {
     update.budgetText = "approximate_guidance";
     update.budgetDeclined = true;
+    // Requesting pricing implies price_calc intent — prevents the bot from
+    // promising a calculation under car_search intent where calc-critical
+    // field checks (volumeCm3, isForResale) are skipped.
+    update.activeIntent = "price_calc";
   }
 
   if (!update.budgetText && !update.nonPassableType && !update.ageWindow) {
