@@ -71,7 +71,7 @@ assertEqual(stateAfterTurn1.activeIntent, "price_calc", "Turn 1: activeIntent = 
 
 // Verify Turn 1 reply asks about nonPassableType (and other missing fields)
 const turn1Plan = planReply(stateAfterTurn1, turn1Msg);
-const turn1Reply = buildSafeFallbackReply(stateAfterTurn1, turn1Plan);
+const turn1Reply = await buildSafeFallbackReply(stateAfterTurn1, turn1Plan);
 console.log(`\n  Turn 1 reply: "${turn1Reply}"`);
 assert(turn1Reply.includes("понял"), "Turn 1 reply: confirms understood info");
 assert(
@@ -106,7 +106,7 @@ assertEqual(stateAfterTurn2.trimLevel, "base", "Turn 2: trimLevel still base");
 
 // Verify Turn 2 reply does NOT re-ask for filled slots
 const turn2Plan = planReply(stateAfterTurn2, turn2Msg);
-const turn2Reply = buildSafeFallbackReply(stateAfterTurn2, turn2Plan);
+const turn2Reply = await buildSafeFallbackReply(stateAfterTurn2, turn2Plan);
 console.log(`\n  Turn 2 reply: "${turn2Reply}"`);
 
 assert(!turn2Reply.includes("до 3 лет или старше 5 лет"), "Turn 2 reply: does NOT re-ask about nonPassableType");
@@ -291,7 +291,7 @@ console.log("\n═══ Slang Test B: Age + volume + ownership + budget guidanc
 
   // Verify the reply
   const plan = planReply(state, msg);
-  const reply = buildSafeFallbackReply(state, plan);
+  const reply = await buildSafeFallbackReply(state, plan);
   console.log(`  Reply B: "${reply}"`);
   assert(reply.includes("понял"), "B reply: confirms understood info");
   assert(reply.includes("1500") || reply.includes("объём"), "B reply: mentions volume");
@@ -311,7 +311,7 @@ console.log("\n═══ Slang Test C: Better condition + excluded negative flag
   assert(state.excludedNegativeFlags.includes("cut_import"), "C: excluded cut_import (не распил)");
 
   const plan = planReply(state, msg);
-  const reply = buildSafeFallbackReply(state, plan);
+  const reply = await buildSafeFallbackReply(state, plan);
   console.log(`  Reply C: "${reply}"`);
   assert(reply.includes("живое состояние") || reply.includes("живая"), "C reply: mentions good condition");
 }
@@ -329,7 +329,7 @@ console.log("\n═══ Slang Test D: No-Russia mileage + MT + FWD + wagon ═�
   assertEqual(state.body, "wagon", "D: body = wagon (сарай)");
 
   const plan = planReply(state, msg);
-  const reply = buildSafeFallbackReply(state, plan);
+  const reply = await buildSafeFallbackReply(state, plan);
   console.log(`  Reply D: "${reply}"`);
   assert(reply.includes("без пробега по РФ") || reply.includes("беспробежн"), "D reply: mentions no-Russia mileage");
   assert(reply.includes("механика") || reply.includes("МТ"), "D reply: mentions manual transmission");
@@ -349,7 +349,7 @@ console.log("\n═══ Slang Test E: CVT + climate + sunroof + top trim ══
   assertEqual(state.trimLevel, "top", "E: trimLevel = top (жирная комплектация)");
 
   const plan = planReply(state, msg);
-  const reply = buildSafeFallbackReply(state, plan);
+  const reply = await buildSafeFallbackReply(state, plan);
   console.log(`  Reply E: "${reply}"`);
   assert(reply.includes("вариатор"), "E reply: mentions CVT");
   assert(reply.includes("климат") || reply.includes("клима"), "E reply: mentions climate");
@@ -378,7 +378,7 @@ console.log("\n═══ Slang Test F: Seller claims as soft trust ═══");
 
   // Reply should NOT treat claims as hard facts
   const plan = planReply(state, msg);
-  const reply = buildSafeFallbackReply(state, plan);
+  const reply = await buildSafeFallbackReply(state, plan);
   console.log(`  Reply F: "${reply}"`);
   assert(reply.includes("продавец заявляет"), "F reply: uses cautious 'продавец заявляет' language");
 }
@@ -1086,13 +1086,13 @@ console.log("══════════════════════�
  * Run a full conversation simulation and validate each turn.
  * Returns the final state after all turns.
  */
-function simulateConversation(
+async function simulateConversation(
   name: string,
   turns: Array<{
     seller: string;
     checks: (state: ConversationState, reply: string, turnNum: number) => void;
   }>,
-): ConversationState {
+): Promise<ConversationState> {
   console.log(`\n──── Simulation: ${name} ────`);
   let state: ConversationState = {
     ...DEFAULT_CONVERSATION_STATE,
@@ -1112,7 +1112,7 @@ function simulateConversation(
     state = applyStateUpdate(state, update, "regex");
 
     const plan = planReply(state, turn.seller);
-    const reply = buildSafeFallbackReply(state, plan);
+    const reply = await buildSafeFallbackReply(state, plan);
     console.log(`  Turn ${turnNum} — Bot: "${reply}"`);
 
     turn.checks(state, reply, turnNum);
@@ -1122,7 +1122,7 @@ function simulateConversation(
 }
 
 // ─── Simulation 1: Honda Vezel full flow (exact problem from bug report) ───
-simulateConversation("Honda Vezel — problem scenario from bug report", [
+await simulateConversation("Honda Vezel — problem scenario from bug report", [
   {
     seller: "можешь посчитать везела, не проходного, передний привод, самый простой, оценка R тоже можно",
     checks: (state, reply, t) => {
@@ -1171,7 +1171,7 @@ simulateConversation("Honda Vezel — problem scenario from bug report", [
 ]);
 
 // ─── Simulation 2: Bare numbers for volume ───
-simulateConversation("Bare number volume parsing", [
+await simulateConversation("Bare number volume parsing", [
   {
     seller: "посчитай приус, проходной, для себя",
     checks: (state, reply, t) => {
@@ -1194,7 +1194,7 @@ simulateConversation("Bare number volume parsing", [
 ]);
 
 // ─── Simulation 3: Bare number volume as "1500" ───
-simulateConversation("Bare number volume 1500", [
+await simulateConversation("Bare number volume 1500", [
   {
     seller: "посчитай фит, непроходной, до 3 лет, для себя",
     checks: (state, reply, t) => {
@@ -1212,7 +1212,7 @@ simulateConversation("Bare number volume 1500", [
 ]);
 
 // ─── Simulation 4: Volume with units ───
-simulateConversation("Volume with various units", [
+await simulateConversation("Volume with various units", [
   {
     seller: "посчитай харек, непроходной, старше 5 лет, для себя",
     checks: (state, reply, t) => {
@@ -1329,7 +1329,7 @@ console.log("\n═══ Volume Unit Variants ═══");
 }
 
 // ─── Simulation 8: Full conversation — user changes mind ───
-simulateConversation("User changes age preference mid-conversation", [
+await simulateConversation("User changes age preference mid-conversation", [
   {
     seller: "посчитай везела, непроходного, до 3 лет, передний привод, для себя",
     checks: (state, _reply, t) => {
@@ -1372,7 +1372,7 @@ console.log("\n═══ Budget Variation Tests ═══");
 }
 
 // ─── Simulation 10: Intent stickiness ───
-simulateConversation("Intent stays price_calc after adding filters", [
+await simulateConversation("Intent stays price_calc after adding filters", [
   {
     seller: "посчитай везела",
     checks: (state, _reply, t) => {
@@ -1397,7 +1397,7 @@ simulateConversation("Intent stays price_calc after adding filters", [
 ]);
 
 // ─── Simulation 11: Complete flow to ready_to_calculate ───
-simulateConversation("Complete flow reaches ready_to_calculate", [
+await simulateConversation("Complete flow reaches ready_to_calculate", [
   {
     seller: "посчитай филдера, проходной, полторашка, для себя, бюджет 500 тысяч йен",
     checks: (state, reply, t) => {
@@ -1414,7 +1414,7 @@ simulateConversation("Complete flow reaches ready_to_calculate", [
 ]);
 
 // ─── Simulation 12: Bot confirms known slots progressively ───
-simulateConversation("Progressive slot filling — each turn adds info", [
+await simulateConversation("Progressive slot filling — each turn adds info", [
   {
     seller: "посчитай приус",
     checks: (state, reply, t) => {
@@ -1463,7 +1463,7 @@ simulateConversation("Progressive slot filling — each turn adds info", [
 ]);
 
 // ─── Simulation 13: Model switch resets dependent slots ───
-simulateConversation("Model switch resets dependent slots", [
+await simulateConversation("Model switch resets dependent slots", [
   {
     seller: "посчитай приус, проходной, 1.5 литра, для себя",
     checks: (state, _reply, t) => {
@@ -1481,6 +1481,41 @@ simulateConversation("Model switch resets dependent slots", [
       assertEqual(state.ageWindow, null, `Sim13 T${t}: ageWindow reset`);
       // isForResale should be preserved (global)
       assertEqual(state.isForResale, false, `Sim13 T${t}: isForResale preserved`);
+    },
+  },
+]);
+
+// ─── Simulation 14: "дай стоимость" triggers price_calc (bug: bot loop) ───
+// Regression test: "дай стоимость Toyota Probox ..." should set activeIntent=price_calc
+// and correctly ask for missing calc-critical fields, not loop on "Сейчас рассчитаю..."
+await simulateConversation("Budget guidance triggers price_calc intent", [
+  {
+    seller: "дай стоимость пробокс 2015 полный привод физлицо",
+    checks: (state, reply, t) => {
+      assertEqual(state.model, "Probox", `Sim14 T${t}: model = Probox`);
+      assertEqual(state.make, "Toyota", `Sim14 T${t}: make = Toyota`);
+      assertEqual(state.year, 2015, `Sim14 T${t}: year = 2015`);
+      assertEqual(state.drivetrain, "4wd", `Sim14 T${t}: drivetrain = 4wd`);
+      assertEqual(state.isLegalEntity, false, `Sim14 T${t}: isLegalEntity = false`);
+      assertEqual(state.isForResale, false, `Sim14 T${t}: isForResale = false (физлицо implies personal)`);
+      assertEqual(state.budgetText, "approximate_guidance", `Sim14 T${t}: budgetText = approximate_guidance`);
+      assertEqual(state.activeIntent, "price_calc", `Sim14 T${t}: activeIntent = price_calc (not car_search)`);
+      // volumeCm3 is still missing — bot should ask, NOT promise calculation
+      assertEqual(state.volumeCm3, null, `Sim14 T${t}: volumeCm3 = null (not provided)`);
+      assert(!reply.includes("Сейчас рассчитаю"), `Sim14 T${t}: does NOT promise calculation yet`);
+      assert(reply.includes("объём") || reply.includes("объем"), `Sim14 T${t}: asks about engine volume`);
+    },
+  },
+  {
+    seller: "1.5 литра",
+    checks: (state, reply, t) => {
+      assertEqual(state.volumeCm3, 1500, `Sim14 T${t}: volumeCm3 = 1500`);
+      assertEqual(state.stage, "ready_to_calculate", `Sim14 T${t}: stage = ready_to_calculate`);
+      // Now all fields are filled — bot should calculate or say it will
+      assert(
+        reply.includes("рассчитаю") || reply.includes("Расчёт") || reply.includes("стоимост"),
+        `Sim14 T${t}: proceeds to calculate`,
+      );
     },
   },
 ]);
