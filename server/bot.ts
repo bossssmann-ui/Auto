@@ -2513,6 +2513,15 @@ PARSED INTENT (структурированный разбор)
   }
 
   // Step 3: apply update to persistent state (includes derive, stage transition, pending question)
+  const prevCalcFields = {
+    auctionPriceJPY: mem.state.auctionPriceJPY,
+    volumeCm3: mem.state.volumeCm3,
+    year: mem.state.year,
+    ageWindow: mem.state.ageWindow,
+    nonPassableType: mem.state.nonPassableType,
+    isForResale: mem.state.isForResale,
+    isLegalEntity: mem.state.isLegalEntity,
+  };
   const mergedState = applyStateUpdate(mem.state, combinedUpdate, mergeSource);
   mem.state = mergedState;
 
@@ -2737,8 +2746,21 @@ PARSED INTENT (структурированный разбор)
     });
   }
 
-  // ── Determine if tools should be included ──
-  // Skip tools when auto-calc already produced a result
+  // Сбрасываем флаг "расчёт уже выполнен", если изменились важные параметры
+  const calcRelevantChanged =
+    mergedState.auctionPriceJPY !== prevCalcFields.auctionPriceJPY ||
+    mergedState.volumeCm3 !== prevCalcFields.volumeCm3 ||
+    mergedState.year !== prevCalcFields.year ||
+    mergedState.ageWindow !== prevCalcFields.ageWindow ||
+    mergedState.nonPassableType !== prevCalcFields.nonPassableType ||
+    mergedState.isForResale !== prevCalcFields.isForResale ||
+    mergedState.isLegalEntity !== prevCalcFields.isLegalEntity;
+
+  if (calcRelevantChanged) {
+    autoCalcDone = false;
+    mergedState.calculationDone = false;
+  }
+
   const includeTools = mergedState.activeIntent === "price_calc" && !autoCalcDone;
 
   const body: Record<string, unknown> = {
