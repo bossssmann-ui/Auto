@@ -902,7 +902,7 @@ async function buildSafeFallbackReply(state: ConversationState, _plan: string[])
 
   // When budget guidance mode is active, ALWAYS check calc-critical fields
   // regardless of activeIntent. This prevents the bot from promising "рассчитаю"
-  // when volumeCm3, isForResale, or isLegalEntity are still missing.
+  // when any calc-critical field (volume, age, ownership, etc.) is still missing.
   if (isBudgetGuidanceMode || state.activeIntent === "price_calc") {
     // Priority 1: nonPassableType
     if (state.ageWindow === "non_passable" && !state.nonPassableType) {
@@ -1856,7 +1856,7 @@ function extractStateUpdate(
   // ── Budget parsing ──
   // Detect "don't know the budget" / "show me approximate prices" FIRST
   // Note: не\s*знаю (optional space) matches both "не знаю" and "незнаю" (common typo).
-  // "средняя стоимость" / "какая стоимость" are price inquiries, not trim level.
+  // "средн* стоимост*" / "как* стоимост*" match all declensions of price inquiry phrases.
   const BUDGET_UNKNOWN_RE = /(?:бюджет[а-яё]*\s+не\s*знаю|не\s*знаю\s+бюджет[а-яё]*|цен[а-яё]*\s+не\s*знаю|не\s*знаю\s+цен|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s*знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост)|жду\s+от\s+(?:тебя|вас)\s+цен|дай\s+ценообразовани|дай\s+(?:цен(?:у|ы|ник)|стоимост[а-яё]*)|покажи\s+цен|скажи\s+цен|сколько\s+стоит|не\s*знаю\s+цену|предлагай|средн[а-яё]*\s+(?:стоимост|цен[а-яё]*)|как(?:ая|ой|ое)\s+(?:стоимост|цен[а-яё]*))/i;
   if (BUDGET_UNKNOWN_RE.test(msg)) {
     update.budgetText = "approximate_guidance";
