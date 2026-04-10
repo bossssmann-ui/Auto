@@ -2007,7 +2007,7 @@ function extractStateUpdate(
   // Common Russian car market pattern — number after model refers to engine displacement.
   // Only triggers when a model was matched in this message and number looks like volume (0.6-9.9).
   if (!update.volumeCm3 && (update.model || update.make)) {
-    const bareDecimal = msg.match(/\b(\d[.,]\d)\b/);
+    const bareDecimal = msg.match(/\b(\d+[.,]\d+)\b/);
     if (bareDecimal) {
       const v = parseFloat(bareDecimal[1].replace(",", "."));
       if (v >= 0.6 && v < 10) {
