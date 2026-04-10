@@ -19,13 +19,29 @@ dist-server
 # amoCRM OAuth tokens (contains secrets)
 amocrm_tokens.json
 
+# Backup / temp files
+*.bak
+*.tmp
+*.backup
+*~
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+._*
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
-.DS_Store
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# Test artifacts
+coverage/
+*.dump
