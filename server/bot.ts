@@ -2653,8 +2653,6 @@ PARSED INTENT (структурированный разбор)
     ].filter(Boolean).length;
 
     if (filledCount >= 2) {
-      console.log(`🔀 Fast-path: deterministic response (${mergedState.make} ${mergedState.model}, ${filledCount} filters)`);
-
       // When all slots are filled (ready_to_calculate), perform auto-calculation
       // and send the formatted result directly — no LLM call needed.
       if (mergedState.stage === "ready_to_calculate" && !mergedState.calculationDone) {
