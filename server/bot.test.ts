@@ -13,6 +13,8 @@ import {
   _test_applyStateUpdate as applyStateUpdate,
   _test_buildSafeFallbackReply as buildSafeFallbackReply,
   _test_planReply as planReply,
+  _test_getMissingCalcCriticalFields as getMissingCalcCriticalFields,
+  _test_hasAllCalcCriticalFields as hasAllCalcCriticalFields,
   _test_DEFAULT_CONVERSATION_STATE as DEFAULT_CONVERSATION_STATE,
   type _test_ConversationState as ConversationState,
 } from "./bot.js";
@@ -1665,6 +1667,332 @@ await simulateConversation("средняя комплектация sets trimLev
     },
   },
 ]);
+
+// ══════════════════════════════════════════════════════════
+// NEW PATTERN-BASED SMOKE TESTS (Sim19+)
+// These test BEHAVIOR PATTERNS, not specific car models.
+// ══════════════════════════════════════════════════════════
+
+// ─── Sim19: "Собрал всё → посчитал" (any model — RAV4 via slang) ───
+// User gives all required params in a few turns using slang.
+// Bot must reach ready_to_calculate without extra questions.
+await simulateConversation("Pattern A: All params → ready_to_calculate (RAV4)", [
+  {
+    seller: "посчитай рав4 2018 2.0 литра, непроходной, для себя, бюджет не знаю",
+    checks: (state, reply, t) => {
+      assertEqual(state.make, "Toyota", `Sim19 T${t}: make = Toyota`);
+      assertEqual(state.model, "RAV4", `Sim19 T${t}: model = RAV4`);
+      assertEqual(state.year, 2018, `Sim19 T${t}: year = 2018`);
+      assertEqual(state.volumeCm3, 2000, `Sim19 T${t}: volumeCm3 = 2000`);
+      assertEqual(state.ageWindow, "non_passable", `Sim19 T${t}: ageWindow = non_passable`);
+      assertEqual(state.nonPassableType, "over_5_years", `Sim19 T${t}: nonPassableType = over_5_years`);
+      assertEqual(state.isForResale, false, `Sim19 T${t}: isForResale = false`);
+      assertEqual(state.isLegalEntity, false, `Sim19 T${t}: isLegalEntity = false`);
+      assertEqual(state.budgetDeclined, true, `Sim19 T${t}: budgetDeclined = true`);
+      assertEqual(state.activeIntent, "price_calc", `Sim19 T${t}: intent = price_calc`);
+      // All fields present → stage = ready_to_calculate
+      assertEqual(state.stage, "ready_to_calculate", `Sim19 T${t}: stage = ready_to_calculate`);
+      // hasAllCalcCriticalFields should be true
+      assert(hasAllCalcCriticalFields(state), `Sim19 T${t}: hasAllCalcCriticalFields = true`);
+      // No clarification questions — ready to calculate
+      assert(!reply.includes("Уточни"), `Sim19 T${t}: no clarification needed`);
+    },
+  },
+]);
+
+// ─── Sim20: "Не хватает объёма" — missing volumeCm3 ───
+// Bot must NOT promise calculation, must ask about volume.
+await simulateConversation("Pattern B: Missing volume → asks, not promises (Forester)", [
+  {
+    seller: "считай форик 2022 для себя, бюджет не знаю",
+    checks: (state, reply, t) => {
+      assertEqual(state.make, "Subaru", `Sim20 T${t}: make = Subaru`);
+      assertEqual(state.model, "Forester", `Sim20 T${t}: model = Forester`);
+      assertEqual(state.year, 2022, `Sim20 T${t}: year = 2022`);
+      assertEqual(state.isForResale, false, `Sim20 T${t}: isForResale = false`);
+      assertEqual(state.isLegalEntity, false, `Sim20 T${t}: isLegalEntity = false`);
+      assertEqual(state.budgetDeclined, true, `Sim20 T${t}: budgetDeclined = true`);
+      // volumeCm3 is missing
+      assertEqual(state.volumeCm3, null, `Sim20 T${t}: volumeCm3 = null`);
+      // Stage must NOT be ready_to_calculate
+      assert(state.stage !== "ready_to_calculate", `Sim20 T${t}: stage != ready_to_calculate`);
+      assert(!hasAllCalcCriticalFields(state), `Sim20 T${t}: hasAllCalcCriticalFields = false`);
+      // Must NOT promise calculation
+      assert(!reply.includes("Сейчас рассчитаю"), `Sim20 T${t}: does NOT promise calculation`);
+      assert(!reply.includes("Все данные есть"), `Sim20 T${t}: does NOT say all data is ready`);
+      // Must ask about volume
+      assert(reply.includes("объём") || reply.includes("объем"), `Sim20 T${t}: asks about volume`);
+    },
+  },
+  {
+    seller: "2.5 литра",
+    checks: (state, reply, t) => {
+      assertEqual(state.volumeCm3, 2500, `Sim20 T${t}: volumeCm3 = 2500`);
+      assertEqual(state.stage, "ready_to_calculate", `Sim20 T${t}: stage = ready_to_calculate`);
+      assert(hasAllCalcCriticalFields(state), `Sim20 T${t}: hasAllCalcCriticalFields = true`);
+      // Now should calculate
+      assert(
+        reply.includes("рассчитаю") || reply.includes("Расчёт") || reply.includes("посчитаю") || reply.includes("стоимост"),
+        `Sim20 T${t}: proceeds to calculate`,
+      );
+    },
+  },
+]);
+
+// ─── Sim21: "хз" / bare budget decline with pending question ───
+// Tests various slang forms of "I don't know" for budget.
+await simulateConversation("Pattern C: хз/незнаю/фиг знает budget decline", [
+  {
+    seller: "посчитай Toyota Crown 2019 3.5 литра юрлицо",
+    checks: (state, reply, t) => {
+      assertEqual(state.model, "Crown", `Sim21 T${t}: model = Crown`);
+      assertEqual(state.year, 2019, `Sim21 T${t}: year = 2019`);
+      assertEqual(state.volumeCm3, 3500, `Sim21 T${t}: volumeCm3 = 3500`);
+      assertEqual(state.isLegalEntity, true, `Sim21 T${t}: isLegalEntity = true`);
+      // isForResale is unknown for юрлицо — should ask
+      assertEqual(state.stage, "collecting_calc_params", `Sim21 T${t}: stage = collecting_calc_params`);
+    },
+  },
+  {
+    // юрлицо doesn't imply "для себя" — bot should have asked, user answers
+    seller: "не для перепродажи",
+    checks: (state, reply, t) => {
+      assertEqual(state.isForResale, false, `Sim21 T${t}: isForResale = false`);
+      // Now only budget is missing — should ask
+      assert(
+        reply.includes("бюджет") || reply.includes("цен") || reply.includes("йен"),
+        `Sim21 T${t}: asks about budget`,
+      );
+    },
+  },
+  {
+    seller: "хз",
+    checks: (state, reply, t) => {
+      assertEqual(state.budgetDeclined, true, `Sim21 T${t}: budgetDeclined = true`);
+      assertEqual(state.budgetText, "approximate_guidance", `Sim21 T${t}: budgetText = approximate_guidance`);
+      assertEqual(state.stage, "ready_to_calculate", `Sim21 T${t}: stage = ready_to_calculate`);
+      assert(hasAllCalcCriticalFields(state), `Sim21 T${t}: hasAllCalcCriticalFields = true`);
+      // Should calculate now
+      assert(
+        reply.includes("рассчитаю") || reply.includes("Расчёт") || reply.includes("стоимост"),
+        `Sim21 T${t}: proceeds to calculate`,
+      );
+    },
+  },
+]);
+
+// ─── Sim22: Jargon-heavy description (Camry) ───
+// "надо камри 2.5, свежая, лет до 5, до сотки пробега, для себя, посчитай по нормальной цене"
+await simulateConversation("Pattern D: Jargon-heavy description parsed correctly", [
+  {
+    seller: "надо камри 2.5, старше 5 лет, до сотки пробега, для себя, посчитай по нормальной цене",
+    checks: (state, reply, t) => {
+      assertEqual(state.model, "Camry", `Sim22 T${t}: model = Camry`);
+      assertEqual(state.make, "Toyota", `Sim22 T${t}: make = Toyota`);
+      assertEqual(state.volumeCm3, 2500, `Sim22 T${t}: volumeCm3 = 2500`);
+      assertEqual(state.isForResale, false, `Sim22 T${t}: isForResale = false`);
+      assertEqual(state.isLegalEntity, false, `Sim22 T${t}: isLegalEntity = false`);
+      assertEqual(state.activeIntent, "price_calc", `Sim22 T${t}: activeIntent = price_calc`);
+      // "старше 5 лет" → non_passable, over_5_years
+      assertEqual(state.ageWindow, "non_passable", `Sim22 T${t}: ageWindow = non_passable`);
+      assertEqual(state.nonPassableType, "over_5_years", `Sim22 T${t}: nonPassableType = over_5_years`);
+      // "до сотки пробега" → mileage parsed
+      assert(state.mileageText != null, `Sim22 T${t}: mileageText captured`);
+      // "посчитай по нормальной цене" → budgetGuidance
+      assertEqual(state.budgetDeclined, true, `Sim22 T${t}: budgetDeclined = true`);
+      assertEqual(state.budgetText, "approximate_guidance", `Sim22 T${t}: budgetText = approximate_guidance`);
+      // All fields filled → ready_to_calculate
+      assertEqual(state.stage, "ready_to_calculate", `Sim22 T${t}: stage = ready_to_calculate`);
+      assert(hasAllCalcCriticalFields(state), `Sim22 T${t}: hasAllCalcCriticalFields = true`);
+    },
+  },
+]);
+
+// ─── Sim23: Missing ownership → bot asks, doesn't promise ───
+await simulateConversation("Pattern E: Missing ownership → asks, never promises calc", [
+  {
+    seller: "сколько стоит Subaru Forester 2020 2.0 литра",
+    checks: (state, reply, t) => {
+      assertEqual(state.model, "Forester", `Sim23 T${t}: model = Forester`);
+      assertEqual(state.make, "Subaru", `Sim23 T${t}: make = Subaru`);
+      assertEqual(state.year, 2020, `Sim23 T${t}: year = 2020`);
+      assertEqual(state.volumeCm3, 2000, `Sim23 T${t}: volumeCm3 = 2000`);
+      assertEqual(state.budgetDeclined, true, `Sim23 T${t}: budgetDeclined = true`);
+      // isForResale and isLegalEntity are unknown
+      assertEqual(state.isForResale, null, `Sim23 T${t}: isForResale = null`);
+      assertEqual(state.isLegalEntity, null, `Sim23 T${t}: isLegalEntity = null`);
+      // NOT ready to calculate
+      assert(!hasAllCalcCriticalFields(state), `Sim23 T${t}: hasAllCalcCriticalFields = false`);
+      assert(state.stage !== "ready_to_calculate", `Sim23 T${t}: stage != ready_to_calculate`);
+      // Must NOT promise calculation
+      assert(!reply.includes("Сейчас рассчитаю"), `Sim23 T${t}: does NOT promise calculation`);
+      // Must ask about ownership
+      assert(
+        reply.includes("физлицо") || reply.includes("юрлицо") || reply.includes("перепродаж") || reply.includes("оформлени"),
+        `Sim23 T${t}: asks about ownership`,
+      );
+    },
+  },
+  {
+    seller: "для себя",
+    checks: (state, reply, t) => {
+      assertEqual(state.isForResale, false, `Sim23 T${t}: isForResale = false`);
+      assertEqual(state.isLegalEntity, false, `Sim23 T${t}: isLegalEntity = false`);
+      assertEqual(state.stage, "ready_to_calculate", `Sim23 T${t}: stage = ready_to_calculate`);
+      assert(hasAllCalcCriticalFields(state), `Sim23 T${t}: hasAllCalcCriticalFields = true`);
+      // Should calculate now
+      assert(
+        reply.includes("рассчитаю") || reply.includes("Расчёт") || reply.includes("стоимост") || reply.includes("посчитаю"),
+        `Sim23 T${t}: proceeds to calculate`,
+      );
+    },
+  },
+]);
+
+// ─── Sim24: "в семью" / "под перепродажу" ownership slang ───
+await simulateConversation("Pattern F: Ownership slang — в семью / под перепродажу", [
+  {
+    seller: "посчитай Nissan Serena 2021 2.0 литра в семью, бюджет не знаю",
+    checks: (state, reply, t) => {
+      assertEqual(state.model, "Serena", `Sim24 T${t}: model = Serena`);
+      assertEqual(state.isForResale, false, `Sim24 T${t}: isForResale = false (в семью = для себя)`);
+      assertEqual(state.isLegalEntity, false, `Sim24 T${t}: isLegalEntity = false (в семью = физлицо)`);
+      assertEqual(state.stage, "ready_to_calculate", `Sim24 T${t}: stage = ready_to_calculate`);
+    },
+  },
+]);
+
+// ─── Sim25: "считай" (bare verb) triggers price_calc ───
+await simulateConversation("Pattern G: считай triggers price_calc intent", [
+  {
+    seller: "харек 2020 полторашка для себя бюджет не знаю считай",
+    checks: (state, reply, t) => {
+      assertEqual(state.model, "Harrier", `Sim25 T${t}: model = Harrier`);
+      assertEqual(state.activeIntent, "price_calc", `Sim25 T${t}: intent = price_calc`);
+      assertEqual(state.volumeCm3, 1500, `Sim25 T${t}: volumeCm3 = 1500`);
+      assertEqual(state.stage, "ready_to_calculate", `Sim25 T${t}: stage = ready_to_calculate`);
+    },
+  },
+]);
+
+// ─── Sim26: getMissingCalcCriticalFields unit tests ───
+console.log("\n═══ Unit tests: getMissingCalcCriticalFields ═══");
+{
+  // Empty state: everything is missing
+  const emptyState: ConversationState = {
+    ...DEFAULT_CONVERSATION_STATE,
+    auctionGradesAllowed: [],
+    needsClarification: [],
+    slotMeta: {},
+    sellerClaims: [],
+    excludedNegativeFlags: [],
+    activeIntent: "price_calc",
+  };
+  const emptyMissing = getMissingCalcCriticalFields(emptyState);
+  assert(emptyMissing.length > 0, "Empty state has missing fields");
+  assert(emptyMissing.some(m => m.field === "model"), "Missing: model");
+  assert(emptyMissing.some(m => m.field === "yearOrAge"), "Missing: yearOrAge");
+  assert(emptyMissing.some(m => m.field === "volumeCm3"), "Missing: volumeCm3");
+  assert(emptyMissing.some(m => m.field === "ownership"), "Missing: ownership");
+  assert(emptyMissing.some(m => m.field === "priceOrBudget"), "Missing: priceOrBudget");
+
+  // Full state: nothing missing
+  const fullState: ConversationState = {
+    ...DEFAULT_CONVERSATION_STATE,
+    auctionGradesAllowed: [],
+    needsClarification: [],
+    slotMeta: {},
+    sellerClaims: [],
+    excludedNegativeFlags: [],
+    activeIntent: "price_calc",
+    model: "RAV4",
+    make: "Toyota",
+    year: 2021,
+    ageWindow: "passable",
+    volumeCm3: 2000,
+    isForResale: false,
+    isLegalEntity: false,
+    budgetDeclined: true,
+    budgetText: "approximate_guidance",
+  };
+  const fullMissing = getMissingCalcCriticalFields(fullState);
+  assertEqual(fullMissing.length, 0, "Full state: no missing fields");
+  assert(hasAllCalcCriticalFields(fullState), "Full state: hasAllCalcCriticalFields = true");
+
+  // Non-passable without type: requires nonPassableType
+  const nonPassableState: ConversationState = {
+    ...fullState,
+    year: null,
+    ageWindow: "non_passable",
+    nonPassableType: null,
+  };
+  const npMissing = getMissingCalcCriticalFields(nonPassableState);
+  assert(npMissing.some(m => m.field === "nonPassableType"), "Non-passable state: needs nonPassableType");
+  assert(!hasAllCalcCriticalFields(nonPassableState), "Non-passable state: not ready");
+}
+
+// ─── Sim27: Extended budget slang — "прицениться", "посоветуй" ───
+console.log("\n═══ Extended budget slang tests ═══");
+{
+  const base: ConversationState = {
+    ...DEFAULT_CONVERSATION_STATE,
+    auctionGradesAllowed: [],
+    needsClarification: [],
+    slotMeta: {},
+    sellerClaims: [],
+    excludedNegativeFlags: [],
+    model: "RAV4",
+    make: "Toyota",
+    activeIntent: "car_search",
+  };
+
+  // "прицениться" should trigger budget guidance
+  const update1 = extractStateUpdate("хочу прицениться", base);
+  assertEqual(update1.set.budgetText, "approximate_guidance", "прицениться → budgetText = approximate_guidance");
+  assertEqual(update1.set.budgetDeclined, true, "прицениться → budgetDeclined = true");
+  assertEqual(update1.set.activeIntent, "price_calc", "прицениться → activeIntent = price_calc");
+
+  // "посчитай по нормальной цене" should trigger budget guidance
+  const update2 = extractStateUpdate("посчитай по нормальной цене", base);
+  assertEqual(update2.set.budgetText, "approximate_guidance", "по нормальной цене → budgetText = approximate_guidance");
+  assertEqual(update2.set.activeIntent, "price_calc", "по нормальной цене → activeIntent = price_calc");
+
+  // Context-aware: "посоветуй" when pending question is about budget
+  const withPending: ConversationState = {
+    ...base,
+    pendingQuestion: "Какой ориентир по бюджету или аукционной цене в йенах?",
+  };
+  const update3 = extractStateUpdate("посоветуй", withPending);
+  assertEqual(update3.set.budgetDeclined, true, "посоветуй (budget pending) → budgetDeclined = true");
+  assertEqual(update3.set.activeIntent, "price_calc", "посоветуй (budget pending) → price_calc");
+
+  // "фиг знает" when pending question is about budget
+  const update4 = extractStateUpdate("фиг знает", withPending);
+  assertEqual(update4.set.budgetDeclined, true, "фиг знает (budget pending) → budgetDeclined = true");
+
+  // "да хз" when pending question is about budget
+  const update5 = extractStateUpdate("да хз", withPending);
+  assertEqual(update5.set.budgetDeclined, true, "да хз (budget pending) → budgetDeclined = true");
+}
+
+// ─── Sim28: "до сотки пробега" mileage slang ───
+console.log("\n═══ Mileage slang tests ═══");
+{
+  const base: ConversationState = {
+    ...DEFAULT_CONVERSATION_STATE,
+    auctionGradesAllowed: [],
+    needsClarification: [],
+    slotMeta: {},
+    sellerClaims: [],
+    excludedNegativeFlags: [],
+  };
+
+  const update1 = extractStateUpdate("до сотки пробега", base);
+  assertEqual(update1.set.mileageText, "до 100 тыс. км", "до сотки пробега → mileageText");
+
+  const update2 = extractStateUpdate("до 80к пробега", base);
+  assertEqual(update2.set.mileageText, "до 80 тыс. км", "до 80к пробега → mileageText");
+}
 
 // ─── Summary ─────────────────────────────────────────────
 console.log(`\n═══ Results: ${passed} passed, ${failed} failed ═══`);
