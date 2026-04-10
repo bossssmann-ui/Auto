@@ -900,7 +900,10 @@ async function buildSafeFallbackReply(state: ConversationState, _plan: string[])
   const missingQuestions: string[] = [];
   const isBudgetGuidanceMode = state.budgetText === "approximate_guidance" || state.budgetDeclined;
 
-  if (state.activeIntent === "price_calc") {
+  // When budget guidance mode is active, ALWAYS check calc-critical fields
+  // regardless of activeIntent. This prevents the bot from promising "рассчитаю"
+  // when volumeCm3, isForResale, or isLegalEntity are still missing.
+  if (isBudgetGuidanceMode || state.activeIntent === "price_calc") {
     // Priority 1: nonPassableType
     if (state.ageWindow === "non_passable" && !state.nonPassableType) {
       missingQuestions.push("нужен вариант до 3 лет или старше 5 лет");
@@ -925,34 +928,14 @@ async function buildSafeFallbackReply(state: ConversationState, _plan: string[])
       missingQuestions.push("какой бюджет или цена покупки в йенах");
     }
   } else if (state.activeIntent === "car_search") {
-    // When budget guidance mode is active, also check calc-critical fields
-    // (defense-in-depth: prevents promising calculation with missing fields)
-    if (isBudgetGuidanceMode) {
-      if (state.ageWindow === "non_passable" && !state.nonPassableType) {
-        missingQuestions.push("нужен вариант до 3 лет или старше 5 лет");
-      }
-      if (!state.year && !state.ageWindow) {
-        missingQuestions.push("какой год или возрастная категория");
-      }
-      if (!state.volumeCm3) {
-        missingQuestions.push("какой объём двигателя");
-      }
-      if (state.isForResale == null && state.isLegalEntity == null) {
-        missingQuestions.push("оформление на физлицо, юрлицо или под перепродажу");
-      } else {
-        if (state.isForResale == null) missingQuestions.push("для перепродажи или для себя");
-        if (state.isLegalEntity == null) missingQuestions.push("физлицо или юрлицо");
-      }
-    } else {
-      if (!state.model && !state.make) {
-        missingQuestions.push("какая модель или марка");
-      }
-      if (!state.year && !state.ageWindow) {
-        missingQuestions.push("какой возраст или год");
-      }
-      if (!state.budgetText && !state.budgetDeclined) {
-        missingQuestions.push("какой бюджет");
-      }
+    if (!state.model && !state.make) {
+      missingQuestions.push("какая модель или марка");
+    }
+    if (!state.year && !state.ageWindow) {
+      missingQuestions.push("какой возраст или год");
+    }
+    if (!state.budgetText && !state.budgetDeclined) {
+      missingQuestions.push("какой бюджет");
     }
   }
 
@@ -1759,10 +1742,13 @@ function extractStateUpdate(
   }
 
   // Trim level
+  // "средняя стоимость" / "средняя цена" are price inquiries, NOT trim level.
+  // Only set trimLevel when "средн" is about комплектация, not about price/cost.
+  const SREDNYAYA_PRICE_RE = /средн[а-яё]*\s+(?:стоимост|цен[а-яё]*|бюджет)/i;
   const BASE_TRIM_RE = /(?:сам(?:ый|ая)\s+прост(?:ой|ая)|попроще|(?<![а-яёА-ЯЁa-zA-Z0-9])база(?![а-яёА-ЯЁa-zA-Z0-9])|базов)/i;
   if (BASE_TRIM_RE.test(msg)) {
     update.trimLevel = "base";
-  } else if (/(?:средн(?:яя|ий|ее)|средн(?:\s|$))/i.test(msg)) {
+  } else if (/(?:средн(?:яя|ий|ее)|средн(?:\s|$))/i.test(msg) && !SREDNYAYA_PRICE_RE.test(msg)) {
     update.trimLevel = "mid";
   } else if (/(?:максималк|максимальн|(?<![а-яёА-ЯЁa-zA-Z0-9])макс(?![а-яёА-ЯЁa-zA-Z0-9])|жирн)/i.test(msg)) {
     update.trimLevel = "top";
@@ -1869,7 +1855,9 @@ function extractStateUpdate(
 
   // ── Budget parsing ──
   // Detect "don't know the budget" / "show me approximate prices" FIRST
-  const BUDGET_UNKNOWN_RE = /(?:бюджет[а-яё]*\s+не\s*знаю|не\s+знаю\s+бюджет[а-яё]*|цен[а-яё]*\s+не\s*знаю|не\s+знаю\s+цен|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s+знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост)|жду\s+от\s+(?:тебя|вас)\s+цен|дай\s+ценообразовани|дай\s+(?:цен(?:у|ы|ник)|стоимост[а-яё]*)|покажи\s+цен|скажи\s+цен|сколько\s+стоит|не\s+знаю\s+цену|предлагай)/i;
+  // Note: не\s*знаю (optional space) matches both "не знаю" and "незнаю" (common typo).
+  // "средняя стоимость" / "какая стоимость" are price inquiries, not trim level.
+  const BUDGET_UNKNOWN_RE = /(?:бюджет[а-яё]*\s+не\s*знаю|не\s*знаю\s+бюджет[а-яё]*|цен[а-яё]*\s+не\s*знаю|не\s*знаю\s+цен|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s*знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост)|жду\s+от\s+(?:тебя|вас)\s+цен|дай\s+ценообразовани|дай\s+(?:цен(?:у|ы|ник)|стоимост[а-яё]*)|покажи\s+цен|скажи\s+цен|сколько\s+стоит|не\s*знаю\s+цену|предлагай|средн[а-яё]*\s+(?:стоимост|цен[а-яё]*)|как(?:ая|ой|ое)\s+(?:стоимост|цен[а-яё]*))/i;
   if (BUDGET_UNKNOWN_RE.test(msg)) {
     update.budgetText = "approximate_guidance";
     update.budgetDeclined = true;
@@ -1877,6 +1865,15 @@ function extractStateUpdate(
     // promising a calculation under car_search intent where calc-critical
     // field checks (volumeCm3, isForResale) are skipped.
     update.activeIntent = "price_calc";
+  }
+
+  // Context-aware budget decline: bare "незнаю" / "не знаю" / "хз" when bot just asked about budget
+  if (!update.budgetText && previousState.pendingQuestion && /(?:бюджет|цен|стоимост)/i.test(previousState.pendingQuestion)) {
+    if (/^(?:не\s*знаю|незнаю|хз|без\s+понятия|понятия\s+не\s+имею|не\s+в\s+курсе)\s*[.!?]?\s*$/i.test(msg.trim())) {
+      update.budgetText = "approximate_guidance";
+      update.budgetDeclined = true;
+      update.activeIntent = "price_calc";
+    }
   }
 
   if (!update.budgetText && !update.nonPassableType && !update.ageWindow) {

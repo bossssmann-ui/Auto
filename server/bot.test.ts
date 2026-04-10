@@ -1563,6 +1563,109 @@ await simulateConversation("Budget guidance universal — Camry variant", [
   },
 ]);
 
+// ─── Simulation 16: Probox multi-turn bug reproduction ───
+// Exact scenario from the bug report: Probox 2015 AWD → "какая средняя стоимость" → "незнаю"
+// The bot must NOT promise calculation until all calc-critical fields are filled.
+await simulateConversation("Probox multi-turn — средняя стоимость + незнаю (bug reproduction)", [
+  {
+    seller: "пробокс 2015 полный привод",
+    checks: (state, reply, t) => {
+      assertEqual(state.model, "Probox", `Sim16 T${t}: model = Probox`);
+      assertEqual(state.make, "Toyota", `Sim16 T${t}: make = Toyota`);
+      assertEqual(state.year, 2015, `Sim16 T${t}: year = 2015`);
+      assertEqual(state.drivetrain, "4wd", `Sim16 T${t}: drivetrain = 4wd`);
+      assertEqual(state.ageWindow, "non_passable", `Sim16 T${t}: ageWindow = non_passable`);
+      assertEqual(state.nonPassableType, "over_5_years", `Sim16 T${t}: nonPassableType = over_5_years`);
+      // Should NOT yet be in budget guidance mode
+      assertEqual(state.budgetDeclined, false, `Sim16 T${t}: budgetDeclined = false`);
+    },
+  },
+  {
+    // "какая средняя стоимость" should trigger budget guidance, NOT trimLevel=mid
+    seller: "какая средняя стоимость",
+    checks: (state, reply, t) => {
+      assertEqual(state.budgetDeclined, true, `Sim16 T${t}: budgetDeclined = true (средняя стоимость = price inquiry)`);
+      assertEqual(state.budgetText, "approximate_guidance", `Sim16 T${t}: budgetText = approximate_guidance`);
+      assertEqual(state.activeIntent, "price_calc", `Sim16 T${t}: activeIntent = price_calc`);
+      // "средняя стоимость" should NOT set trimLevel
+      assertEqual(state.trimLevel, null, `Sim16 T${t}: trimLevel = null (not средняя комплектация)`);
+      // Must NOT promise calculation — volumeCm3 and ownership are still missing
+      assert(!reply.includes("Сейчас рассчитаю"), `Sim16 T${t}: does NOT promise calculation`);
+      // Must ask for the next missing field
+      assert(
+        reply.includes("объём") || reply.includes("объем") ||
+        reply.includes("физлицо") || reply.includes("оформлени"),
+        `Sim16 T${t}: asks about missing calc-critical field`,
+      );
+    },
+  },
+  {
+    seller: "объём 1.5 для себя",
+    checks: (state, reply, t) => {
+      assertEqual(state.volumeCm3, 1500, `Sim16 T${t}: volumeCm3 = 1500`);
+      assertEqual(state.isForResale, false, `Sim16 T${t}: isForResale = false`);
+      assertEqual(state.isLegalEntity, false, `Sim16 T${t}: isLegalEntity = false`);
+      assertEqual(state.stage, "ready_to_calculate", `Sim16 T${t}: stage = ready_to_calculate`);
+      // NOW all fields are filled — bot should calculate
+      assert(
+        reply.includes("рассчитаю") || reply.includes("Расчёт") || reply.includes("стоимост"),
+        `Sim16 T${t}: proceeds to calculate`,
+      );
+    },
+  },
+]);
+
+// ─── Simulation 17: Bare "незнаю" (no space) budget decline with pending budget question ───
+await simulateConversation("Bare незнаю triggers budget decline when budget was pending", [
+  {
+    seller: "посчитай камри 2021 для себя",
+    checks: (state, reply, t) => {
+      assertEqual(state.model, "Camry", `Sim17 T${t}: model = Camry`);
+      assertEqual(state.isForResale, false, `Sim17 T${t}: isForResale = false`);
+      assertEqual(state.isLegalEntity, false, `Sim17 T${t}: isLegalEntity = false`);
+      assertEqual(state.activeIntent, "price_calc", `Sim17 T${t}: activeIntent = price_calc`);
+    },
+  },
+  {
+    seller: "2.5 литра",
+    checks: (state, reply, t) => {
+      assertEqual(state.volumeCm3, 2500, `Sim17 T${t}: volumeCm3 = 2500`);
+      // Budget is the only missing calc-critical field
+      assert(
+        reply.includes("бюджет") || reply.includes("цен") || reply.includes("йен"),
+        `Sim17 T${t}: asks about budget`,
+      );
+    },
+  },
+  {
+    // "незнаю" (one word, no space) — common typo, must still trigger budget decline
+    seller: "незнаю",
+    checks: (state, reply, t) => {
+      assertEqual(state.budgetDeclined, true, `Sim17 T${t}: budgetDeclined = true`);
+      assertEqual(state.budgetText, "approximate_guidance", `Sim17 T${t}: budgetText = approximate_guidance`);
+      assertEqual(state.stage, "ready_to_calculate", `Sim17 T${t}: stage = ready_to_calculate`);
+      // All fields are now filled — should calculate
+      assert(
+        reply.includes("рассчитаю") || reply.includes("Расчёт") || reply.includes("стоимост"),
+        `Sim17 T${t}: proceeds to calculate`,
+      );
+    },
+  },
+]);
+
+// ─── Simulation 18: "средняя комплектация" must still set trimLevel ───
+await simulateConversation("средняя комплектация sets trimLevel (not budget guidance)", [
+  {
+    seller: "пробокс 2015 средняя комплектация",
+    checks: (state, _reply, t) => {
+      assertEqual(state.model, "Probox", `Sim18 T${t}: model = Probox`);
+      assertEqual(state.trimLevel, "mid", `Sim18 T${t}: trimLevel = mid`);
+      // "средняя комплектация" is NOT a price inquiry
+      assertEqual(state.budgetDeclined, false, `Sim18 T${t}: budgetDeclined = false`);
+    },
+  },
+]);
+
 // ─── Summary ─────────────────────────────────────────────
 console.log(`\n═══ Results: ${passed} passed, ${failed} failed ═══`);
 if (failed > 0) {
