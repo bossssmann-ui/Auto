@@ -1030,15 +1030,17 @@ const conversations = new Map<number, ConversationEntry>();
 const MAX_RECENT_MESSAGES = 6; // 3 user/assistant pairs
 const CONVERSATION_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-/** Evict stale conversations periodically */
-setInterval(() => {
-  const now = Date.now();
-  for (const [userId, entry] of conversations) {
-    if (now - entry.lastActivity > CONVERSATION_TTL_MS) {
-      conversations.delete(userId);
+/** Evict stale conversations periodically (skip in test mode to avoid hanging) */
+if (!isTestMode) {
+  setInterval(() => {
+    const now = Date.now();
+    for (const [userId, entry] of conversations) {
+      if (now - entry.lastActivity > CONVERSATION_TTL_MS) {
+        conversations.delete(userId);
+      }
     }
-  }
-}, 10 * 60 * 1000); // every 10 minutes
+  }, 10 * 60 * 1000); // every 10 minutes
+}
 
 function getMemory(userId: number): ConversationEntry {
   let entry = conversations.get(userId);
@@ -1792,9 +1794,7 @@ function extractStateUpdate(
   } else if (/(?:физлиц|физ\.\s*лиц)/i.test(msg)) {
     update.isLegalEntity = false;
     // "физлицо" (individual person) implies personal use, not resale
-    if (update.isForResale == null) {
-      update.isForResale = false;
-    }
+    update.isForResale = false;
   }
 
   // ── C) Auction grade parsing ──

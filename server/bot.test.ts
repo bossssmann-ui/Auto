@@ -1516,6 +1516,49 @@ await simulateConversation("Budget guidance triggers price_calc intent", [
         reply.includes("рассчитаю") || reply.includes("Расчёт") || reply.includes("стоимост"),
         `Sim14 T${t}: proceeds to calculate`,
       );
+      // Intent must stay price_calc
+      assertEqual(state.activeIntent, "price_calc", `Sim14 T${t}: intent stays price_calc`);
+    },
+  },
+  {
+    // After calculation promise, user adds filters — bot should not break
+    seller: "пробег до 150 тысяч, с хорошей аукционной оценкой",
+    checks: (state, _reply, t) => {
+      // Intent must remain price_calc, not downgrade
+      assertEqual(state.activeIntent, "price_calc", `Sim14 T${t}: intent stays price_calc after adding filters`);
+      // Model must be preserved
+      assertEqual(state.model, "Probox", `Sim14 T${t}: model preserved`);
+      assertEqual(state.make, "Toyota", `Sim14 T${t}: make preserved`);
+      // Mileage should be captured
+      assert(state.mileageText != null, `Sim14 T${t}: mileage captured`);
+    },
+  },
+]);
+
+// ─── Simulation 15: Budget guidance with different model (universality check) ───
+await simulateConversation("Budget guidance universal — Camry variant", [
+  {
+    seller: "сколько стоит камри 2020 физлицо",
+    checks: (state, reply, t) => {
+      assertEqual(state.model, "Camry", `Sim15 T${t}: model = Camry`);
+      assertEqual(state.activeIntent, "price_calc", `Sim15 T${t}: intent = price_calc`);
+      assertEqual(state.isLegalEntity, false, `Sim15 T${t}: isLegalEntity = false`);
+      assertEqual(state.isForResale, false, `Sim15 T${t}: isForResale = false`);
+      assertEqual(state.budgetText, "approximate_guidance", `Sim15 T${t}: budgetText = approximate_guidance`);
+      // Missing volumeCm3 — should ask
+      assert(!reply.includes("Сейчас рассчитаю"), `Sim15 T${t}: does NOT promise calc yet`);
+      assert(reply.includes("объём") || reply.includes("объем"), `Sim15 T${t}: asks about volume`);
+    },
+  },
+  {
+    seller: "2.5 литра",
+    checks: (state, reply, t) => {
+      assertEqual(state.volumeCm3, 2500, `Sim15 T${t}: volumeCm3 = 2500`);
+      assertEqual(state.stage, "ready_to_calculate", `Sim15 T${t}: stage = ready_to_calculate`);
+      assert(
+        reply.includes("рассчитаю") || reply.includes("Расчёт") || reply.includes("стоимост"),
+        `Sim15 T${t}: proceeds to calculate`,
+      );
     },
   },
 ]);
