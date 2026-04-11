@@ -315,10 +315,9 @@ function deriveImpliedState(
 //   3. volumeCm3      — engine displacement
 //   4. isForResale     — personal use or resale (affects customs duty)
 //   5. isLegalEntity   — individual or legal entity (affects customs duty)
-//   6. price/budget    — auctionPriceJPY OR budgetText/budgetDeclined (for range mode)
 //
-// NOT calc-critical: drivetrain, trimLevel, mileage, grade, color, etc.
-// Those are search/filter parameters only.
+// NOT calc-critical: drivetrain, trimLevel, mileage, grade, color,
+// budget/price (bot auto-calculates range when no explicit price given).
 // ══════════════════════════════════════════════════════════
 
 interface MissingCalcField {
@@ -365,10 +364,9 @@ function getMissingCalcCriticalFields(state: ConversationState): MissingCalcFiel
     }
   }
 
-  // Price/budget: either explicit auction price, approximate_guidance, or budgetDeclined
-  if (state.auctionPriceJPY == null && !state.budgetText && !state.budgetDeclined) {
-    missing.push({ field: "priceOrBudget", question: "какой бюджет или цена покупки в йенах" });
-  }
+  // Price/budget is NOT calc-critical — bot auto-calculates a range when
+  // no explicit auction price is given.  User may still provide budget
+  // voluntarily, which enables exact calculation.
 
   return missing;
 }
@@ -469,9 +467,6 @@ function buildPendingQuestion(state: ConversationState): string | null {
     if (state.isLegalEntity == null) {
       return "Оформляете на физлицо или юрлицо?";
     }
-    if (!state.auctionPriceJPY && !state.budgetText && !state.budgetDeclined) {
-      return "Какой ориентир по бюджету или аукционной цене в йенах?";
-    }
     return null;
   }
 
@@ -487,9 +482,6 @@ function buildPendingQuestion(state: ConversationState): string | null {
       // Enough info — only ask critical missing if any
       if (!state.ageWindow && !state.year) {
         return "Какой возраст интересует — проходной (3–5 лет) или другой?";
-      }
-      if (!state.budgetText && !state.budgetDeclined) {
-        return "Какой ориентир по бюджету?";
       }
       return null;
     }
@@ -720,9 +712,6 @@ function planReply(state: ConversationState, _userMessage: string): string[] {
     if (state.year == null && state.ageWindow == null) {
       missingCritical.push("возрастное окно или год");
     }
-    if (!state.budgetText && !state.budgetDeclined) {
-      missingCritical.push("бюджет");
-    }
   }
 
   // Only top 1 — strictly one clarifying question at a time
@@ -825,8 +814,8 @@ function replyContradictsState(reply: string, state: ConversationState): boolean
     if (trimQuestions.some(p => lower.includes(p))) return true;
   }
 
-  // 5. If budget is declined (user said "не знаю бюджет"), reply should not re-ask about it
-  if (state.budgetDeclined || state.budgetText === "approximate_guidance") {
+  // 5. Bot must NEVER ask about budget — it auto-calculates a price range instead
+  {
     const budgetQuestions = [
       "какой бюджет", "какой ориентир по бюджету",
       "какой бюджет или цена", "какая сумма",
@@ -973,9 +962,6 @@ async function buildSafeFallbackReply(state: ConversationState, _plan: string[])
     if (!state.year && !state.ageWindow) {
       missingQuestions.push("какой возраст или год");
     }
-    if (!state.budgetText && !state.budgetDeclined) {
-      missingQuestions.push("какой бюджет");
-    }
   }
 
   if (missingQuestions.length > 0) {
@@ -983,17 +969,17 @@ async function buildSafeFallbackReply(state: ConversationState, _plan: string[])
     // NEVER say "Сейчас рассчитаю" when fields are missing.
     parts.push(`Уточни, пожалуйста: ${missingQuestions[0]}.`);
   } else if (state.calculationDone) {
-    if (isBudgetGuidanceMode) {
+    if (state.auctionPriceJPY == null) {
       parts.push("Расчёт по среднерыночным ценам уже выполнен. Если хотите уточнить — напишите новые параметры.");
     } else {
       parts.push("Расчёт уже выполнен. Если хотите пересчитать с другими параметрами — напишите новые данные.");
     }
   } else if (hasAllCalcCriticalFields(state)) {
     // ALL fields present — safe to promise calculation
-    if (isBudgetGuidanceMode) {
-      parts.push("Сейчас рассчитаю по среднерыночным ценам и дам диапазон стоимости.");
-    } else {
+    if (state.auctionPriceJPY != null) {
       parts.push("Все данные есть, сейчас посчитаю.");
+    } else {
+      parts.push("Сейчас рассчитаю по среднерыночным ценам и дам диапазон стоимости.");
     }
   }
 
@@ -1404,7 +1390,6 @@ async function summarizeMemory(
     "Compress this conversation into a short factual memory for a vehicle import sales assistant.",
     "Keep only durable facts:",
     "- requested car models and nicknames",
-    "- budget",
     "- passable/non-passable age preference",
     "- drivetrain",
     "- hybrid/turbo preference",
@@ -2259,7 +2244,6 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
   • тип топлива (бензин / дизель / гибрид)
   • комплектация (база / средняя / максималка)
   • аукционная оценка (S/6/5/4.5/4/3.5/3/R/RA)
-  • бюджет
   • прочие ограничения (цвет, руль, опции и т.д.)
 
 Если клиент уже назвал конкретную модель И хотя бы 2 фильтра — НЕ задавай общие вопросы типа «какую машину хотите?», «какой бренд?», «кроссовер или внедорожник?». Сразу подтверди понятые фильтры и задай строго 1 точечный уточняющий вопрос — самый важный из недостающих параметров.
@@ -2294,7 +2278,8 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 ════════════════════════════════════════════
 
 Если клиент уже указал модель + ≥2 фильтра:
-  • Задавай НЕ БОЛЕЕ 1–2 коротких вопросов по самым важным пробелам (бюджет, год, свежий/старый непроходной).
+  • Задавай НЕ БОЛЕЕ 1–2 коротких вопросов по самым важным пробелам (год, свежий/старый непроходной, объём двигателя).
+  • НИКОГДА не спрашивай бюджет — бот сам рассчитает диапазон цен по среднерыночным аукционным ценам.
   • НЕ спрашивай: какой тип кузова, какой бренд, SUV или кроссовер, страну происхождения — если модель уже делает это очевидным.
 
 Если информации совсем мало (нет модели и фильтров менее 2) — тогда да, задавай уточняющие вопросы, но кратко и по делу.
@@ -2306,13 +2291,13 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 Если клиент говорит «можешь посчитать» или «посчитай», но не дал достаточно данных для реального расчёта растаможки/под ключ:
   1. НЕ паникуй и НЕ меняй тему.
   2. Подтверди модель и уже понятные фильтры.
-  3. Скажи, что именно ещё нужно для расчёта (год, бюджет, аукционная цена, объём двигателя).
+  3. Скажи, что именно ещё нужно для расчёта (год, объём двигателя, для кого — физлицо/юрлицо/перепродажа). НИКОГДА не спрашивай бюджет — бот сам рассчитает вилку цен по среднерыночным аукционным ценам.
   4. Задай 1–2 вопроса строго по недостающим параметрам.
   5. Оставайся на той же модели.
 
 Пример правильной логики для запроса «можешь посчитать везела, не проходного, передний привод, самый простой, оценка R тоже можно»:
   → модель = Honda Vezel, непроходной, FWD, базовая комплектация, R допустима, приоритет — подешевле.
-  → Ответ: подтвердить фильтры, пояснить нюанс оценки R (смотрим аукционник внимательно), спросить только: какой непроходной (свежий до 3 лет или старше 5 лет) и ориентир по бюджету.
+  → Ответ: подтвердить фильтры, пояснить нюанс оценки R (смотрим аукционник внимательно), спросить только: какой непроходной (свежий до 3 лет или старше 5 лет).
 
 ════════════════════════════════════════════
 АУКЦИОННЫЕ ОЦЕНКИ ≠ ГОД ≠ ПОКОЛЕНИЕ ≠ КОМПЛЕКТАЦИЯ
@@ -2464,7 +2449,7 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 Старые авто (до ~2008–2009):
 • Не выдумывай стандартный маршрут.
 • Честно скажи про возможные сложности (ЭПТС, СБКТС, утильсбор).
-• Собери: модель, год, двигатель, местонахождение, бюджет.
+• Собери: модель, год, двигатель, местонахождение.
 • Попроси имя и телефон для связи с менеджером.
 • Не подавай предположения как факт.
 
@@ -2507,10 +2492,10 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 РАСЧЁТ ОБЫЧНОЙ МАШИНЫ
 ════════════════════════════════════════════
 
-Если просят расчёт: собери тип, цену в йенах, объём двигателя, возраст, для кого авто (физлицо / юрлицо / перепродажа) — затем вызови calculate_vehicle_price. Результат распиши понятно.
+Если просят расчёт: собери тип, объём двигателя, возраст, для кого авто (физлицо / юрлицо / перепродажа) — затем рассчитай по среднерыночным аукционным ценам и дай диапазон стоимости «от ... до ...». Если клиент назвал конкретную цену в йенах — используй её для точного расчёта.
 Лимит скидки — 20 000 ₽, только для закрытия сделки.
 
-ПРАВИЛО: Если клиент говорит «не знаю бюджет», «жду от тебя цену», «дай ценообразование», «сколько стоит», «сориентируй по цене» — НЕ спрашивай бюджет повторно. Вместо этого рассчитай стоимость по среднерыночным аукционным ценам и предоставь диапазон «от ... до ...».
+ПРАВИЛО: НИКОГДА не спрашивай бюджет. Бот сам предлагает вилку цен по среднерыночным аукционным ценам. Если клиент добровольно называет бюджет или аукционную цену в йенах — используй для точного расчёта.
 
 ПРАВИЛО: Задавай строго ОДИН уточняющий вопрос за раз — самый важный из оставшихся. Не задавай 2+ вопроса одновременно.
 
@@ -2519,14 +2504,14 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 ════════════════════════════════════════════
 
 Клиент: «Нужен приус проходной, вд, белый, в максималке»
-→ Сразу: Prius, 3–5 лет, 4WD, белый, топ-комплектация, JDM. Не переспрашиваешь руль. Уточняешь: бюджет, поколение (50 или 60).
+→ Сразу: Prius, 3–5 лет, 4WD, белый, топ-комплектация, JDM. Не переспрашиваешь руль. Уточняешь: поколение (50 или 60), объём двигателя.
 
 Клиент: «Хочу 30 приус проходной»
 → Prius 30 — 2009–2015, 11+ лет → не проходной. Предлагаешь Prius 50 или 60.
 
 Клиент: «можешь посчитать везела, не проходного, передний привод, самый простой, оценка R тоже можно»
 → Модель = Honda Vezel, непроходной, FWD, база, R допустима, приоритет — подешевле.
-→ Подтверди фильтры, поясни нюанс R (смотрим аукционник внимательно), спроси только: свежий до 3 лет или старше 5 лет и бюджет.
+→ Подтверди фильтры, поясни нюанс R (смотрим аукционник внимательно), спроси только: свежий до 3 лет или старше 5 лет.
 
 ════════════════════════════════════════════
 ЗАПРЕЩЁННОЕ ПОВЕДЕНИЕ (нарушение = провал)
@@ -2559,8 +2544,8 @@ PARSED INTENT (структурированный разбор)
 • ДОВЕРЯЙ извлечённым полям: model, make, drivetrain, trimLevel, ageWindow, auctionGradesAllowed и др.
 • НЕ переспрашивай то, что уже заполнено (например, если model="Honda Vezel" — работай с Vezel, не спрашивай "какую машину хотите?").
 • НЕ переинтерпретируй модель в абстрактный класс техники.
-• Задавай вопросы ТОЛЬКО по полям, перечисленным в needsClarification, или по критически недостающим данным (бюджет, точный диапазон лет).
-• Если activeIntent="price_calc" но данных для calculate_vehicle_price недостаточно — подтверди фильтры и спроси только недостающее (аукционная цена в йенах, объём двигателя, точный возраст).
+• Задавай вопросы ТОЛЬКО по полям, перечисленным в needsClarification, или по критически недостающим данным (точный диапазон лет, объём двигателя). НИКОГДА не спрашивай бюджет.
+• Если activeIntent="price_calc" но данных для calculate_vehicle_price недостаточно — подтверди фильтры и спроси только недостающее (объём двигателя, точный возраст). НИКОГДА не спрашивай бюджет.
 
 ════════════════════════════════════════════
 ЖЁСТКИЙ ЗАПРЕТ: ЕСЛИ МОДЕЛЬ ИЗВЕСТНА
@@ -2657,7 +2642,7 @@ PARSED INTENT (структурированный разбор)
       // and send the formatted result directly — no LLM call needed.
       if (mergedState.stage === "ready_to_calculate" && !mergedState.calculationDone) {
         try {
-          const isRangeMode = (mergedState.budgetText === "approximate_guidance" || mergedState.budgetDeclined) && mergedState.auctionPriceJPY == null;
+          const isRangeMode = mergedState.auctionPriceJPY == null;
 
           if (isRangeMode) {
             const rangeParams = buildCalcParamsRange(mergedState);
@@ -2732,8 +2717,7 @@ PARSED INTENT (структурированный разбор)
     if (mergedState.isForResale == null && mergedState.isLegalEntity == null) missing.push("для себя (физлицо) или юрлицо/перепродажа");
     else if (mergedState.isForResale == null) missing.push("для перепродажи или для себя");
     else if (mergedState.isLegalEntity == null) missing.push("физлицо или юрлицо");
-    // Budget is LAST priority and skipped if budgetDeclined
-    if (!mergedState.auctionPriceJPY && !mergedState.budgetText && !mergedState.budgetDeclined) missing.push("бюджет или аукционная цена в йенах");
+    // Budget is NEVER asked — bot auto-calculates range mode when no explicit price given
 
     stateContextParts.push(
       `\n═══ ИНСТРУКЦИЯ ═══`,
@@ -2777,10 +2761,10 @@ PARSED INTENT (структурированный разбор)
   // Use buildCalcParamsFromState directly instead of relying on LLM making the correct tool call
   let autoCalcDone = false;
   if (mergedState.stage === "ready_to_calculate" && !mergedState.calculationDone) {
-    const isRangeMode = (mergedState.budgetText === "approximate_guidance" || mergedState.budgetDeclined) && mergedState.auctionPriceJPY == null;
+    const isRangeMode = mergedState.auctionPriceJPY == null;
 
     if (isRangeMode) {
-      // Range calculation: user doesn't know budget — calculate with market price range
+      // Range calculation: no explicit price — calculate with market price range
       const rangeParams = buildCalcParamsRange(mergedState);
       if (rangeParams) {
         try {
@@ -2790,14 +2774,14 @@ PARSED INTENT (структурированный разбор)
           ]);
           stateContextParts.push(
             `\n═══ РЕЗУЛЬТАТ РАСЧЁТА ДИАПАЗОНА (выполнен автоматически) ═══`,
-            `Клиент не назвал бюджет — рассчитано по среднерыночным аукционным ценам.`,
+            `Рассчитано по среднерыночным аукционным ценам.`,
             `Аукционная цена ОТ: ${rangeParams.low.priceJPY.toLocaleString("ru")} йен`,
             `Результат (нижняя граница):`,
             JSON.stringify(lowResult, null, 2),
             `Аукционная цена ДО: ${rangeParams.high.priceJPY.toLocaleString("ru")} йен`,
             `Результат (верхняя граница):`,
             JSON.stringify(highResult, null, 2),
-            `Распиши клиенту ДИАПАЗОН стоимости «от ... до ...» понятно и красиво по-русски. Объясни, что точная цена зависит от аукционной стоимости конкретного лота. НЕ вызывай calculate_vehicle_price — расчёт уже сделан. НЕ спрашивай бюджет повторно.`,
+            `Распиши клиенту ДИАПАЗОН стоимости «от ... до ...» понятно и красиво по-русски. Объясни, что точная цена зависит от аукционной стоимости конкретного лота. НЕ вызывай calculate_vehicle_price — расчёт уже сделан. НЕ спрашивай бюджет.`,
           );
           autoCalcDone = true;
           mergedState.calculationDone = true;
