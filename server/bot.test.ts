@@ -1447,19 +1447,13 @@ await simulateConversation("Progressive slot filling — each turn adds info", [
       assertEqual(state.isForResale, false, `Sim12 T${t}: isForResale = false`);
       assertEqual(state.isLegalEntity, false, `Sim12 T${t}: isLegalEntity = false`);
       assert(!reply.includes("физлицо или юрлицо"), `Sim12 T${t}: does NOT re-ask ownership`);
-      // Should ask about budget (the remaining calc-critical field)
-      assert(
-        reply.includes("бюджет") || reply.includes("цен") || reply.includes("йен"),
-        `Sim12 T${t}: asks about budget`,
-      );
-    },
-  },
-  {
-    seller: "бюджет не знаю, дай стоимость",
-    checks: (state, reply, t) => {
-      assertEqual(state.budgetDeclined, true, `Sim12 T${t}: budgetDeclined = true`);
+      // All calc-critical fields are now present — should auto-calculate (range mode)
       assertEqual(state.stage, "ready_to_calculate", `Sim12 T${t}: stage = ready_to_calculate`);
-      assert(!reply.includes("какой бюджет"), `Sim12 T${t}: does NOT re-ask budget`);
+      assert(!reply.includes("какой бюджет"), `Sim12 T${t}: does NOT ask budget`);
+      assert(
+        reply.includes("рассчитаю") || reply.includes("Расчёт") || reply.includes("стоимост") || reply.includes("среднерыночн"),
+        `Sim12 T${t}: proceeds to calculate`,
+      );
     },
   },
 ]);
@@ -1617,8 +1611,8 @@ await simulateConversation("Probox multi-turn — средняя стоимос�
   },
 ]);
 
-// ─── Simulation 17: Bare "незнаю" (no space) budget decline with pending budget question ───
-await simulateConversation("Bare незнаю triggers budget decline when budget was pending", [
+// ─── Simulation 17: All calc-critical fields present → auto-calculates in range mode ───
+await simulateConversation("All calc fields present → auto-calculates range (no budget question)", [
   {
     seller: "посчитай камри 2021 для себя",
     checks: (state, reply, t) => {
@@ -1632,25 +1626,14 @@ await simulateConversation("Bare незнаю triggers budget decline when budge
     seller: "2.5 литра",
     checks: (state, reply, t) => {
       assertEqual(state.volumeCm3, 2500, `Sim17 T${t}: volumeCm3 = 2500`);
-      // Budget is the only missing calc-critical field
-      assert(
-        reply.includes("бюджет") || reply.includes("цен") || reply.includes("йен"),
-        `Sim17 T${t}: asks about budget`,
-      );
-    },
-  },
-  {
-    // "незнаю" (one word, no space) — common typo, must still trigger budget decline
-    seller: "незнаю",
-    checks: (state, reply, t) => {
-      assertEqual(state.budgetDeclined, true, `Sim17 T${t}: budgetDeclined = true`);
-      assertEqual(state.budgetText, "approximate_guidance", `Sim17 T${t}: budgetText = approximate_guidance`);
+      // All calc-critical fields are now present — should auto-calculate (range mode)
       assertEqual(state.stage, "ready_to_calculate", `Sim17 T${t}: stage = ready_to_calculate`);
-      // All fields are now filled — should calculate
       assert(
-        reply.includes("рассчитаю") || reply.includes("Расчёт") || reply.includes("стоимост"),
+        reply.includes("рассчитаю") || reply.includes("Расчёт") || reply.includes("стоимост") || reply.includes("среднерыночн"),
         `Sim17 T${t}: proceeds to calculate`,
       );
+      // Must NOT ask about budget
+      assert(!reply.includes("какой бюджет"), `Sim17 T${t}: does NOT ask budget`);
     },
   },
 ]);
@@ -1739,9 +1722,9 @@ await simulateConversation("Pattern B: Missing volume → asks, not promises (Fo
   },
 ]);
 
-// ─── Sim21: "хз" / bare budget decline with pending question ───
-// Tests various slang forms of "I don't know" for budget.
-await simulateConversation("Pattern C: хз/незнаю/фиг знает budget decline", [
+// ─── Sim21: All non-budget fields present → auto-calculates range ───
+// Tests that after providing ownership, bot auto-calculates instead of asking for budget.
+await simulateConversation("Pattern C: ownership completes calc fields → auto-range calc", [
   {
     seller: "посчитай Toyota Crown 2019 3.5 литра юрлицо",
     checks: (state, reply, t) => {
@@ -1758,25 +1741,15 @@ await simulateConversation("Pattern C: хз/незнаю/фиг знает budge
     seller: "не для перепродажи",
     checks: (state, reply, t) => {
       assertEqual(state.isForResale, false, `Sim21 T${t}: isForResale = false`);
-      // Now only budget is missing — should ask
-      assert(
-        reply.includes("бюджет") || reply.includes("цен") || reply.includes("йен"),
-        `Sim21 T${t}: asks about budget`,
-      );
-    },
-  },
-  {
-    seller: "хз",
-    checks: (state, reply, t) => {
-      assertEqual(state.budgetDeclined, true, `Sim21 T${t}: budgetDeclined = true`);
-      assertEqual(state.budgetText, "approximate_guidance", `Sim21 T${t}: budgetText = approximate_guidance`);
+      // All calc-critical fields are now present — should auto-calculate (range mode)
       assertEqual(state.stage, "ready_to_calculate", `Sim21 T${t}: stage = ready_to_calculate`);
       assert(hasAllCalcCriticalFields(state), `Sim21 T${t}: hasAllCalcCriticalFields = true`);
-      // Should calculate now
       assert(
-        reply.includes("рассчитаю") || reply.includes("Расчёт") || reply.includes("стоимост"),
+        reply.includes("рассчитаю") || reply.includes("Расчёт") || reply.includes("стоимост") || reply.includes("среднерыночн"),
         `Sim21 T${t}: proceeds to calculate`,
       );
+      // Must NOT ask about budget
+      assert(!reply.includes("какой бюджет"), `Sim21 T${t}: does NOT ask budget`);
     },
   },
 ]);
@@ -1894,7 +1867,7 @@ console.log("\n═══ Unit tests: getMissingCalcCriticalFields ═══");
   assert(emptyMissing.some(m => m.field === "yearOrAge"), "Missing: yearOrAge");
   assert(emptyMissing.some(m => m.field === "volumeCm3"), "Missing: volumeCm3");
   assert(emptyMissing.some(m => m.field === "ownership"), "Missing: ownership");
-  assert(emptyMissing.some(m => m.field === "priceOrBudget"), "Missing: priceOrBudget");
+  // priceOrBudget is no longer calc-critical — bot auto-calculates range mode
 
   // Full state: nothing missing
   const fullState: ConversationState = {
