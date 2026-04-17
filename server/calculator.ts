@@ -5,6 +5,7 @@ export interface CalcParams {
   ageYears: number;
   isForResale: boolean;
   isLegalEntity: boolean;
+  fuelType?: 'gasoline' | 'hybrid' | 'diesel' | 'ev' | 'phev' | null;
 }
 
 interface CalcSuccess {
@@ -15,6 +16,7 @@ interface CalcSuccess {
   utilFeeRub: number;
   fixedFeesRub: number;
   finalTotalRub: number;
+  isSanctioned: boolean;
   appliedRates: { JPY: number; USD: number; EUR: number };
 }
 
@@ -40,6 +42,33 @@ const FREIGHT_USD: Record<string, number> = {
   jeep: 500,
   moto: 300,
 };
+
+// Sanctions freight: vehicles with ICE >1900cc, all hybrids, and all EVs
+// are banned from direct Japan→Russia export since August 2023.
+// They go via third countries at higher fixed freight rates.
+const SANCTIONS_FREIGHT_USD: Record<string, number> = {
+  car: 3500,
+  jeep: 4000,  // SUVs, full-size minivans (Alphard-class), large buses
+  moto: 300,   // motorcycles are not sanctioned
+};
+
+const SANCTIONS_VOLUME_THRESHOLD_CM3 = 1900;
+
+/**
+ * Determine if a vehicle is sanctioned under Japan's August 2023 export ban.
+ * Sanctioned = all hybrids, all EVs/PHEVs, or ICE with volume > 1900 cc.
+ */
+export function isSanctionedVehicle(
+  volumeCm3: number,
+  fuelType?: string | null,
+): boolean {
+  // All hybrids and EVs are sanctioned regardless of engine volume
+  if (fuelType === 'hybrid' || fuelType === 'ev' || fuelType === 'phev') {
+    return true;
+  }
+  // ICE vehicles with volume > 1900 cc are sanctioned
+  return volumeCm3 > SANCTIONS_VOLUME_THRESHOLD_CM3;
+}
 
 const FIXED_FEES_RUB = 185_000;
 
@@ -191,7 +220,7 @@ function calcMotoDutyEur(): number {
 }
 
 export async function calculateTurnkeyPrice(params: CalcParams): Promise<CalcResult> {
-  const { vehicleType, priceJPY, volumeCm3, ageYears, isForResale, isLegalEntity } = params;
+  const { vehicleType, priceJPY, volumeCm3, ageYears, isForResale, isLegalEntity, fuelType } = params;
 
   if (vehicleType === 'special' || vehicleType === 'special_vehicle') {
     return {
@@ -211,7 +240,10 @@ export async function calculateTurnkeyPrice(params: CalcParams): Promise<CalcRes
   const japanTotalJpy = priceWithExport + inlandJpy;
   const japanTotalRub = Math.round(japanTotalJpy * JPY_BANK);
 
-  const freightUsd = FREIGHT_USD[vehicleType] ?? FREIGHT_USD['car'];
+  // Sanctions check: hybrids, EVs, and ICE >1900cc go via third countries
+  const sanctioned = vehicleType !== 'moto' && isSanctionedVehicle(volumeCm3, fuelType);
+  const freightTable = sanctioned ? SANCTIONS_FREIGHT_USD : FREIGHT_USD;
+  const freightUsd = freightTable[vehicleType] ?? freightTable['car'];
   const freightRub = Math.round(freightUsd * USD_BANK);
 
   const customsValueEur = (priceJPY * JPY_CBR) / EUR_CBR;
@@ -239,6 +271,7 @@ export async function calculateTurnkeyPrice(params: CalcParams): Promise<CalcRes
     utilFeeRub,
     fixedFeesRub,
     finalTotalRub,
+    isSanctioned: sanctioned,
     appliedRates: {
       JPY: Math.round(JPY_BANK * RATE_PRECISION) / RATE_PRECISION,
       USD: Math.round(USD_BANK * RATE_PRECISION) / RATE_PRECISION,

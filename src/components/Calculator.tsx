@@ -22,6 +22,8 @@ interface CalcResult {
   epts: number
   glonass: number
   broker: number
+  sanctionsFreight: number
+  isSanctioned: boolean
   total: number
 }
 
@@ -100,6 +102,15 @@ const CLEARANCE_TABLE = [
   { max: 10000000, fee: 27000 },
   { max: Infinity, fee: 30000 },
 ]
+
+/* ─── Sanctions freight (Japan export ban since Aug 2023) ─ */
+const SANCTIONS_VOLUME_THRESHOLD = 1900
+const SANCTIONS_FREIGHT_USD_CAR = 3500
+
+function isSanctionedVehicle(cc: number, engineType: EngineType): boolean {
+  if (engineType === 'hybrid' || engineType === 'electric') return true
+  return cc > SANCTIONS_VOLUME_THRESHOLD
+}
 
 /* ─── Helpers ────────────────────────────────────────── */
 const formatRub = (n: number) => Math.round(n).toLocaleString('ru-RU') + ' ₽'
@@ -246,6 +257,7 @@ export default function Calculator() {
     const yr = parseInt(year) || new Date().getFullYear()
     const rate = rates[currency]
     const eurRate = rates.EUR
+    const usdRate = rates.USD
     const priceRub = price * rate
     const priceEur = priceRub / eurRate
 
@@ -260,6 +272,11 @@ export default function Calculator() {
       customsDuty = calcCustomsDutyCar(priceEur, cc, age, eurRate)
     }
 
+    // Sanctions freight (Japan export ban since Aug 2023)
+    const sanctioned = vehicleType === 'car' && isSanctionedVehicle(cc, engineType)
+    const sanctionsFreightUsd = sanctioned ? SANCTIONS_FREIGHT_USD_CAR : 0
+    const sanctionsFreight = sanctionsFreightUsd * usdRate
+
     const customsFee = calcCustomsFee(priceRub)
     const utilsbor = calcUtilsbor(vehicleType, ownerType, cc, yr)
     const isSpecial = vehicleType === 'special'
@@ -268,7 +285,7 @@ export default function Calculator() {
     const sbkts = isSpecial ? 0 : SBKTS_FEE
     const broker = BROKER_FEE
 
-    const subtotal = customsDuty + customsFee + utilsbor + epts + glonass + sbkts + broker
+    const subtotal = customsDuty + customsFee + utilsbor + epts + glonass + sbkts + broker + sanctionsFreight
     const nds = isSpecial || ownerType === 'entity' ? subtotal * 0.22 : 0
     const total = subtotal + nds
 
@@ -281,6 +298,8 @@ export default function Calculator() {
       epts: Math.round(epts),
       glonass: Math.round(glonass),
       broker: Math.round(broker),
+      sanctionsFreight: Math.round(sanctionsFreight),
+      isSanctioned: sanctioned,
       total: Math.round(total),
     })
   }, [auctionPrice, engineVolume, year, vehicleType, ownerType, engineType, currency, rates])
@@ -607,6 +626,26 @@ export default function Calculator() {
                     <Row label="ГЛОНАСС" value={result.glonass} />
                   )}
                   <Row label="Таможенный брокер" value={result.broker} />
+
+                  {/* Sanctions freight */}
+                  {result.isSanctioned && result.sanctionsFreight > 0 && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-text-secondary">
+                        Фрахт через третьи страны ⚠️
+                      </span>
+                      <span className="font-semibold text-amber-600">
+                        {formatRub(result.sanctionsFreight)}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Sanctions warning */}
+                  {result.isSanctioned && (
+                    <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                      ⚠️ Авто попадает под санкции Японии (авг. 2023) — прямой экспорт
+                      запрещён. Доставка через третьи страны, фрахт увеличен.
+                    </div>
+                  )}
 
                   {/* Logistics — individual calculation */}
                   <div className="flex items-center justify-between text-sm">

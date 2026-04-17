@@ -54,7 +54,7 @@ const tools = [{
   type: "function" as const,
   function: {
     name: "calculate_vehicle_price",
-    description: "Рассчитать стоимость импортного авто. Возвращает цены в рублях.",
+    description: "Рассчитать стоимость импортного авто. Возвращает цены в рублях. Автоматически определяет санкционный статус (ДВС >1900cc, гибрид, EV) и применяет повышенный фрахт через третьи страны.",
     parameters: {
       type: "object",
       properties: {
@@ -63,7 +63,8 @@ const tools = [{
         volumeCm3: { type: "number" },
         ageYears: { type: "number" },
         isForResale: { type: "boolean" },
-        isLegalEntity: { type: "boolean" }
+        isLegalEntity: { type: "boolean" },
+        fuelType: { type: "string", enum: ["gasoline", "hybrid", "diesel", "ev", "phev"], description: "Тип топлива. Гибриды и EV автоматически санкционные." }
       },
       required: ["vehicleType", "priceJPY", "volumeCm3", "ageYears", "isForResale", "isLegalEntity"]
     }
@@ -607,6 +608,7 @@ function buildCalcParamsFromState(state: ConversationState): CalcParams | null {
     ageYears,
     isForResale: state.isForResale,
     isLegalEntity: state.isLegalEntity,
+    fuelType: state.fuelType,
   };
 }
 
@@ -670,6 +672,7 @@ function buildCalcParamsRange(state: ConversationState): { low: CalcParams; high
       ageYears,
       isForResale: state.isForResale,
       isLegalEntity: state.isLegalEntity,
+      fuelType: state.fuelType,
     },
     high: {
       vehicleType,
@@ -678,6 +681,7 @@ function buildCalcParamsRange(state: ConversationState): { low: CalcParams; high
       ageYears,
       isForResale: state.isForResale,
       isLegalEntity: state.isLegalEntity,
+      fuelType: state.fuelType,
     },
   };
 }
@@ -996,11 +1000,18 @@ function formatCalcResultReply(state: ConversationState, result: CalcResult): st
   const lines: string[] = [];
   lines.push(`Расчёт стоимости ${modelName} «под ключ»:\n`);
   lines.push(`• Авто в Японии (с внутренней доставкой): ${fmt(result.japanTotalRub)} ₽`);
-  lines.push(`• Фрахт до Владивостока: ${fmt(result.freightRub)} ₽`);
+  if (result.isSanctioned) {
+    lines.push(`• Фрахт через третьи страны (санкционный авто): ${fmt(result.freightRub)} ₽`);
+  } else {
+    lines.push(`• Фрахт до Владивостока: ${fmt(result.freightRub)} ₽`);
+  }
   lines.push(`• Таможенная пошлина + акциз + НДС: ${fmt(result.customsDutyRub)} ₽`);
   lines.push(`• Утилизационный сбор: ${fmt(result.utilFeeRub)} ₽`);
   lines.push(`• Брокер + СВХ + СБКТС + прочие: ${fmt(result.fixedFeesRub)} ₽`);
   lines.push(`\n💰 Итого «под ключ» во Владивостоке: ${fmt(result.finalTotalRub)} ₽`);
+  if (result.isSanctioned) {
+    lines.push(`\n⚠️ Авто попадает под японские санкции (с августа 2023). Доставка через третьи страны — фрахт увеличен.`);
+  }
   lines.push(`\nЕсли нужно — могу пересчитать с другими параметрами.`);
   return lines.join("\n");
 }
@@ -1018,8 +1029,13 @@ function formatRangeCalcResultReply(
   if (!lowResult.success) return lowResult.message;
   if (!highResult.success) return highResult.message;
 
+  const sanctioned = lowResult.isSanctioned;
+
   const lines: string[] = [];
   lines.push(`Расчёт стоимости ${modelName} «под ключ» по среднерыночным ценам:\n`);
+  if (sanctioned) {
+    lines.push(`⚠️ Авто попадает под японские санкции — фрахт через третьи страны.\n`);
+  }
   lines.push(`Аукционная цена от ${fmt(rangeParams.low.priceJPY)} до ${fmt(rangeParams.high.priceJPY)} йен.\n`);
   lines.push(`📉 Нижняя граница (${fmt(rangeParams.low.priceJPY)} йен):`);
   lines.push(`  Итого «под ключ»: ${fmt(lowResult.finalTotalRub)} ₽\n`);
@@ -2357,7 +2373,7 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 • «правый» = правый руль (RHD).
 • «левый» = левый руль (LHD).
 • «аукционник» = аукционный лист.
-• «санкционка» = автомобиль с нестандартной логистикой (объём > 1.9 л и др. ограничения).
+• «санкционка» = автомобиль, запрещённый к прямому экспорту из Японии (ДВС >1.9 л, гибрид, электро). Считается автоматически с фрахтом через третьи страны.
 • «конструктор» = ввоз с разборкой и сборкой на месте.
 • «распил» = ввоз распиленного кузова.
 • «бенз» = бензиновый двигатель.
@@ -2483,10 +2499,28 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 Упоминай площадку только когда это важно для вопроса. 2–3 фразы по делу.
 
 ════════════════════════════════════════════
-СПЕЦКАТЕГОРИЯ И СПЕЦТЕХНИКА
+САНКЦИИ ЯПОНИИ (с августа 2023) И ФРАХТ
 ════════════════════════════════════════════
 
-Авто спецкатегории (>1.9 л) или спецтехника: не считай цену, скажи что логистика нестандартная, собери параметры, передай оператору.
+Япония запретила прямой экспорт в Россию:
+  • Все автомобили с ДВС объёмом более 1900 куб. см.
+  • Все гибриды (включая мягкие) и все электромобили.
+  • Часть коммерческого транспорта (фургоны, крупные автобусы).
+
+Такие машины («санкционные») ввозятся только через третьи страны.
+Калькулятор АВТОМАТИЧЕСКИ определяет санкционность и закладывает повышенный фрахт:
+  • 3 500 USD — для легковых автомобилей (sedan, hatchback, compact crossover).
+  • 4 000 USD — для джипов, рамных внедорожников, полноразмерных минивэнов/автобусов класса Toyota Alphard и аналогичных.
+
+Примеры санкционных моделей: Land Cruiser, Crown, RAV4 с мотором >1.9 л, Alphard, Camry 2.5/3.5, все Lexus, крупные Honda/Mazda/Subaru кроссоверы, любой гибрид (Prius, Aqua HV, Vezel HV и т.п.), любой электромобиль (Leaf, bZ4X и т.п.).
+
+Бот рассчитывает санкционный фрахт автоматически — НЕ нужно передавать оператору. Просто покажи результат и поясни, что фрахт увеличен из-за санкций.
+
+════════════════════════════════════════════
+СПЕЦТЕХНИКА
+════════════════════════════════════════════
+
+Спецтехника (экскаваторы, бульдозеры, краны и т.п.): не считай цену, скажи что логистика нестандартная, собери параметры, передай оператору. Санкционные легковые авто (ДВС >1.9 л, гибриды, EV) — считай автоматически с санкционным фрахтом.
 
 ════════════════════════════════════════════
 РАСЧЁТ ОБЫЧНОЙ МАШИНЫ
