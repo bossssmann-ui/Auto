@@ -104,12 +104,12 @@ const CLEARANCE_TABLE = [
 ]
 
 /* ─── Sanctions freight (Japan export ban since Aug 2023) ─ */
-const SANCTIONS_VOLUME_THRESHOLD = 1900
+const SANCTIONS_VOLUME_THRESHOLD_CC = 1900
 const SANCTIONS_FREIGHT_USD_CAR = 3500
 
 function isSanctionedVehicle(cc: number, engineType: EngineType): boolean {
   if (engineType === 'hybrid' || engineType === 'electric') return true
-  return cc > SANCTIONS_VOLUME_THRESHOLD
+  return cc > SANCTIONS_VOLUME_THRESHOLD_CC
 }
 
 /* ─── Helpers ────────────────────────────────────────── */
