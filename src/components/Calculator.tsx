@@ -229,6 +229,7 @@ export default function Calculator() {
   const [leadName, setLeadName] = useState('')
   const [leadPhone, setLeadPhone] = useState('')
   const [leadSent, setLeadSent] = useState(false)
+  const [leadError, setLeadError] = useState(false)
 
   /* Fetch CBR exchange rates */
   useEffect(() => {
@@ -327,8 +328,9 @@ export default function Calculator() {
 
   const handleLeadSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    setLeadError(false)
     try {
-      await submitLead({
+      const res = await submitLead({
         name: leadName,
         phone: leadPhone,
         vehicleType,
@@ -341,10 +343,14 @@ export default function Calculator() {
         city,
         source: 'calculator',
       })
+      if (res.success) {
+        setLeadSent(true)
+      } else {
+        setLeadError(true)
+      }
     } catch {
-      // Silently continue — form shows success regardless so the UX isn't broken
+      setLeadError(true)
     }
-    setLeadSent(true)
   }
 
   const canProceedStep2 =
@@ -709,6 +715,11 @@ export default function Calculator() {
                   >
                     Отправить полный расчёт в WhatsApp
                   </button>
+                  {leadError && (
+                    <p className="mt-3 text-sm font-medium text-red-600">
+                      Не удалось отправить заявку. Попробуйте ещё раз.
+                    </p>
+                  )}
                 </form>
               ) : (
                 <div className="mt-6 rounded-xl bg-green-50 p-5 text-center">

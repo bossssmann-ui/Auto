@@ -5,16 +5,22 @@ export default function LeadMagnet() {
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [submitted, setSubmitted] = useState(false)
+  const [submitError, setSubmitError] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (name.trim() && phone.trim()) {
+      setSubmitError(false)
       try {
-        await submitLead({ name, phone, source: 'lead-magnet' })
+        const res = await submitLead({ name, phone, source: 'lead-magnet' })
+        if (res.success) {
+          setSubmitted(true)
+        } else {
+          setSubmitError(true)
+        }
       } catch {
-        // Silently continue
+        setSubmitError(true)
       }
-      setSubmitted(true)
     }
   }
 
@@ -63,6 +69,11 @@ export default function LeadMagnet() {
                 Нажимая кнопку, вы соглашаетесь с политикой обработки
                 персональных данных
               </p>
+              {submitError && (
+                <p className="text-sm font-medium text-red-300">
+                  Не удалось отправить заявку. Попробуйте ещё раз.
+                </p>
+              )}
             </form>
           ) : (
             <div className="mt-10 rounded-xl bg-white/10 p-8">
