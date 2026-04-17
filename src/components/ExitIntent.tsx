@@ -5,6 +5,7 @@ export default function ExitIntent() {
   const [show, setShow] = useState(false)
   const [phone, setPhone] = useState('')
   const [submitted, setSubmitted] = useState(false)
+  const [submitError, setSubmitError] = useState(false)
 
   useEffect(() => {
     const alreadyShown = localStorage.getItem('exitIntentShown')
@@ -24,12 +25,17 @@ export default function ExitIntent() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (phone.trim()) {
+      setSubmitError(false)
       try {
-        await submitLead({ name: 'Не указано', phone, source: 'exit-intent' })
+        const res = await submitLead({ name: 'Не указано', phone, source: 'exit-intent' })
+        if (res.success) {
+          setSubmitted(true)
+        } else {
+          setSubmitError(true)
+        }
       } catch {
-        // Silently continue
+        setSubmitError(true)
       }
-      setSubmitted(true)
     }
   }
 
@@ -79,6 +85,11 @@ export default function ExitIntent() {
                 Нажимая кнопку, вы соглашаетесь с политикой обработки
                 персональных данных
               </p>
+              {submitError && (
+                <p className="text-sm font-medium text-red-600 text-center">
+                  Не удалось отправить заявку. Попробуйте ещё раз.
+                </p>
+              )}
             </form>
           </>
         ) : (
