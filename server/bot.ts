@@ -46,7 +46,10 @@ const tools = [{
   type: "function" as const,
   function: {
     name: "calculate_vehicle_price",
-    description: "Рассчитать стоимость авто из Японии. Возвращает цены в рублях.",
+    description:
+      "Рассчитать стоимость авто из Японии. Возвращает цены в рублях. " +
+      "ВАЖНО: fuelType и isVan — ключевые для санкционной логистики (Япония → РФ). " +
+      "Гибриды/электро/ДВС>1900/VAN везутся через третьи страны с повышенным фрахтом.",
     parameters: {
       type: "object",
       properties: {
@@ -55,9 +58,18 @@ const tools = [{
         volumeCm3: { type: "number" },
         ageYears: { type: "number" },
         isForResale: { type: "boolean" },
-        isLegalEntity: { type: "boolean" }
+        isLegalEntity: { type: "boolean" },
+        fuelType: {
+          type: "string",
+          enum: ["ice", "hybrid", "electric"],
+          description: "Тип двигателя. 'ice' — бензин/дизель. 'hybrid' — любой гибрид (включая мягкий/PHEV). 'electric' — EV."
+        },
+        isVan: {
+          type: "boolean",
+          description: "Машина относится к категории VAN (Alphard, Hiace, Serena, Noah, Voxy, Stepwgn и т.п.). Для джипов/седанов/хэтчей = false."
+        }
       },
-      required: ["vehicleType", "priceJPY", "volumeCm3", "ageYears", "isForResale", "isLegalEntity"]
+      required: ["vehicleType", "priceJPY", "volumeCm3", "ageYears", "isForResale", "isLegalEntity", "fuelType"]
     }
   }
 }];
@@ -274,9 +286,8 @@ function computeNeedsClarification(state: ConversationState): string[] {
   }
 
   if (state.activeIntent === "price_calc") {
-    if (state.auctionPriceJPY == null && !state.budgetText) {
-      missing.push("priceOrBudget");
-    }
+    // Не спрашиваем бюджет/цену у клиента — LLM оценивает вилку сам
+    // и вызывает калькулятор с нижней и верхней границей priceJPY.
     if (state.volumeCm3 == null) {
       missing.push("volumeCm3");
     }
@@ -341,9 +352,7 @@ function buildPendingQuestion(state: ConversationState): string | null {
   }
 
   if (state.stage === "collecting_calc_params") {
-    if (!state.auctionPriceJPY && !state.budgetText) {
-      return "Какой ориентир по бюджету или аукционной цене в йенах?";
-    }
+    // Бюджет у клиента не спрашиваем — LLM сам считает вилку.
     if (!state.volumeCm3) {
       return "Какой объём двигателя?";
     }
@@ -375,9 +384,7 @@ function buildPendingQuestion(state: ConversationState): string | null {
       if (!state.ageWindow && !state.year) {
         return "Какой возраст интересует — проходной (3–5 лет) или другой?";
       }
-      if (!state.budgetText) {
-        return "Какой ориентир по бюджету?";
-      }
+      // Бюджет не спрашиваем — LLM озвучит вилку цены.
       return null;
     }
 
@@ -468,6 +475,34 @@ function buildCalcParamsFromState(state: ConversationState): CalcParams | null {
     vehicleType = "restricted";
   }
 
+  // Map state.fuelType → calculator fuelType (for sanctions classification)
+  let fuelType: CalcParams["fuelType"];
+  switch (state.fuelType) {
+    case "hybrid":
+    case "phev":
+      fuelType = "hybrid";
+      break;
+    case "ev":
+      fuelType = "electric";
+      break;
+    case "gasoline":
+    case "diesel":
+      fuelType = "ice";
+      break;
+    default:
+      fuelType = undefined; // calculator defaults to 'ice'
+  }
+
+  // VAN detection from body field (best-effort; LLM can override via tool call).
+  // Plain substring check — \b doesn't work reliably with Cyrillic in JS.
+  const bodyLower = (state.body ?? "").toLowerCase();
+  const isVan =
+    bodyLower.includes("van") ||
+    bodyLower.includes("минивэн") ||
+    bodyLower.includes("минивен") ||
+    bodyLower.includes("микроавтобус") ||
+    bodyLower.includes("фургон");
+
   return {
     vehicleType,
     priceJPY: state.auctionPriceJPY,
@@ -475,6 +510,8 @@ function buildCalcParamsFromState(state: ConversationState): CalcParams | null {
     ageYears,
     isForResale: state.isForResale,
     isLegalEntity: state.isLegalEntity,
+    fuelType,
+    isVan,
   };
 }
 
@@ -501,9 +538,7 @@ function planReply(state: ConversationState, _userMessage: string): string[] {
     if (state.ageWindow === "non_passable" && state.nonPassableType == null) {
       missingCritical.push("непроходной: свежий (до 3 лет) или старый (старше 5 лет)");
     }
-    if (state.auctionPriceJPY == null && !state.budgetText) {
-      missingCritical.push("бюджет или аукционная цена в йенах");
-    }
+    // Бюджет у клиента НЕ спрашиваем — LLM сам оценивает вилку цены.
     if (state.volumeCm3 == null) {
       missingCritical.push("объём двигателя");
     }
@@ -523,9 +558,7 @@ function planReply(state: ConversationState, _userMessage: string): string[] {
     if (state.year == null && state.ageWindow == null) {
       missingCritical.push("возрастное окно или год");
     }
-    if (!state.budgetText) {
-      missingCritical.push("бюджет");
-    }
+    // Бюджет у клиента НЕ спрашиваем — озвучиваем вилку цены сами.
   }
 
   // Only top 2
@@ -702,9 +735,7 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
     if (!state.year && !state.ageWindow) {
       missingQuestions.push("какой год или возрастная категория");
     }
-    if (!state.auctionPriceJPY && !state.budgetText) {
-      missingQuestions.push("какой бюджет или цена покупки в йенах");
-    }
+    // Бюджет у клиента не спрашиваем — LLM сам озвучит вилку цены.
     if (!state.volumeCm3) {
       missingQuestions.push("какой объём двигателя");
     }
@@ -721,9 +752,7 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
     if (!state.year && !state.ageWindow) {
       missingQuestions.push("какой возраст или год");
     }
-    if (!state.budgetText) {
-      missingQuestions.push("какой бюджет");
-    }
+    // Бюджет не спрашиваем — отвечаем вилкой цены.
   }
 
   if (missingQuestions.length > 0) {
@@ -1719,7 +1748,31 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
   • бюджет
   • прочие ограничения (цвет, руль, опции и т.д.)
 
-Если клиент уже назвал конкретную модель И хотя бы 2 фильтра — НЕ задавай общие вопросы типа «какую машину хотите?», «какой бренд?», «кроссовер или внедорожник?». Сразу подтверди понятые фильтры и задай максимум 1–2 точечных уточняющих вопроса по самым важным недостающим параметрам (бюджет, диапазон лет, гибрид/бензин).
+Если клиент уже назвал конкретную модель И хотя бы 2 фильтра — НЕ задавай общие вопросы типа «какую машину хотите?», «какой бренд?», «кроссовер или внедорожник?». Сразу подтверди понятые фильтры и задай максимум 1–2 точечных уточняющих вопроса по самым важным недостающим параметрам (диапазон лет, гибрид/бензин, комплектация).
+
+⛔ БЮДЖЕТ У КЛИЕНТА НЕ СПРАШИВАЕМ. Вместо этого озвучиваем вилку цены сами — см. блок «ВИЛКА ЦЕНЫ».
+
+════════════════════════════════════════════
+САНКЦИОННЫЕ МАШИНЫ (Япония → РФ, с августа 2023)
+════════════════════════════════════════════
+
+Япония запретила прямой экспорт в РФ для целых категорий машин. Такие машины везём через третьи страны, фрахт выше обычного.
+
+Машина считается САНКЦИОННОЙ, если выполняется ЛЮБОЕ условие:
+  • любой гибрид или электромобиль (независимо от объёма; включая мягкие гибриды и PHEV);
+  • ДВС (бензин/дизель) объёмом БОЛЕЕ 1900 см³;
+  • категория VAN (Alphard, Hiace, Vellfire, Serena, Noah, Voxy, Stepwgn, Elgrand, Odyssey и аналоги — японские минивэны/микроавтобусы/фургоны).
+
+Если машина санкционная — ОБЯЗАТЕЛЬНО предупреди клиента: «Везём через третью страну, поэтому фрахт выше». Не скрывай это.
+
+Мото:
+  • Стоимость мотоцикла > 600 000 ¥ FOB Япония — считается санкционным, фрахт индивидуальный, зови оператора (НЕ пытайся сам назвать цифры).
+
+Когда вызываешь инструмент calculate_vehicle_price:
+  • ВСЕГДА указывай fuelType: "ice" (бензин/дизель) / "hybrid" (любой гибрид) / "electric" (EV);
+  • ВСЕГДА указывай isVan: true для минивэнов/микроавтобусов/фургонов, false для седанов/хэтчей/джипов.
+
+Если ты НЕ уверен в классификации VAN или в том, что машина попадает под санкции — НЕ рассчитывай сам, напиши «уточню у оператора» и зови менеджера. Лучше задержать ответ, чем назвать неправильную цену.
 
 ════════════════════════════════════════════
 ЖЁСТКОЕ ПРАВИЛО: НИКОГДА НЕ ТЕРЯЙ МОДЕЛЬ
@@ -2145,7 +2198,7 @@ PARSED INTENT (структурированный разбор)
   // Stage-specific instructions with clear known/missing breakdown
   if (mergedState.stage === "collecting_calc_params") {
     const missing: string[] = [];
-    if (!mergedState.auctionPriceJPY && !mergedState.budgetText) missing.push("бюджет или аукционная цена в йенах");
+    // Бюджет у клиента НЕ спрашиваем: LLM оценивает вилку JPY сам и вызывает калькулятор дважды (low/high).
     if (!mergedState.volumeCm3) missing.push("объём двигателя");
     if (!mergedState.year && !mergedState.ageWindow) missing.push("год или возрастное окно");
     if (mergedState.ageWindow === "non_passable" && !mergedState.nonPassableType) missing.push("уточнить непроходной: свежий (до 3 лет) или старый (5+ лет)");
@@ -2297,6 +2350,8 @@ PARSED INTENT (структурированный разбор)
             ageYears?: number;
             isForResale?: boolean;
             isLegalEntity?: boolean;
+            fuelType?: string;
+            isVan?: boolean;
           };
 
           // Validate required numeric params — reject if missing to avoid nonsense calculations
@@ -2316,6 +2371,8 @@ PARSED INTENT (структурированный разбор)
             ageYears: args.ageYears,
             isForResale: args.isForResale ?? false,
             isLegalEntity: args.isLegalEntity ?? false,
+            fuelType: (args.fuelType as CalcParams["fuelType"]) ?? "ice",
+            isVan: args.isVan ?? false,
           };
 
           const result = await calculateTurnkeyPrice(calcParams);

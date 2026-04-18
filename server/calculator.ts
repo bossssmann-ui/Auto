@@ -5,6 +5,10 @@ export interface CalcParams {
   ageYears: number;
   isForResale: boolean;
   isLegalEntity: boolean;
+  // Sanctions classification (Japan → Russia export ban since Aug 2023).
+  // Optional for backward compatibility; when omitted, treated as 'ice' / non-VAN.
+  fuelType?: 'ice' | 'hybrid' | 'electric';
+  isVan?: boolean;
 }
 
 interface CalcSuccess {
@@ -15,6 +19,7 @@ interface CalcSuccess {
   utilFeeRub: number;
   fixedFeesRub: number;
   finalTotalRub: number;
+  sanctioned: boolean;
   appliedRates: { JPY: number; USD: number; EUR: number };
 }
 
@@ -40,6 +45,17 @@ const FREIGHT_USD: Record<string, number> = {
   jeep: 500,
   moto: 300,
 };
+
+// Sanctions: Japan → Russia direct export ban (Aug 2023).
+// Sanctioned vehicles are re-routed via third countries → elevated freight.
+const SANCTIONED_FREIGHT_USD: Record<string, number> = {
+  car: 3_500,
+  jeep: 4_000,
+  van: 4_000,
+};
+
+const SANCTIONED_VOLUME_THRESHOLD_CM3 = 1_900;
+const MOTO_HUMAN_PRICE_THRESHOLD_JPY = 600_000;
 
 const FIXED_FEES_RUB = 185_000;
 
@@ -190,8 +206,27 @@ function calcMotoDutyEur(): number {
   return 0;
 }
 
+/**
+ * Determine if a vehicle falls under Japan's Aug 2023 export ban to Russia.
+ * Sanctioned vehicles are imported via third countries with elevated freight.
+ */
+function isSanctionedVehicle(
+  vehicleType: CalcParams['vehicleType'],
+  volumeCm3: number,
+  fuelType: 'ice' | 'hybrid' | 'electric',
+  isVan: boolean,
+): boolean {
+  if (vehicleType === 'moto') return false;
+  if (fuelType === 'hybrid' || fuelType === 'electric') return true;
+  if (volumeCm3 > SANCTIONED_VOLUME_THRESHOLD_CM3) return true;
+  if (isVan) return true;
+  return false;
+}
+
 export async function calculateTurnkeyPrice(params: CalcParams): Promise<CalcResult> {
   const { vehicleType, priceJPY, volumeCm3, ageYears, isForResale, isLegalEntity } = params;
+  const fuelType = params.fuelType ?? 'ice';
+  const isVan = params.isVan ?? false;
 
   if (vehicleType === 'special' || vehicleType === 'special_vehicle') {
     return {
@@ -200,6 +235,17 @@ export async function calculateTurnkeyPrice(params: CalcParams): Promise<CalcRes
       message: 'Расчёт спецтехники и авто с нестандартной логистикой только по запросу. Перевожу на оператора.',
     };
   }
+
+  // Motorcycles over 600 000 JPY FOB are sanctioned → freight is individual, human must quote.
+  if (vehicleType === 'moto' && priceJPY > MOTO_HUMAN_PRICE_THRESHOLD_JPY) {
+    return {
+      success: false,
+      requireHuman: true,
+      message: 'Мотоцикл дороже 600 000 иен FOB — считается санкционным, фрахт рассчитывается индивидуально. Перевожу на оператора.',
+    };
+  }
+
+  const sanctioned = isSanctionedVehicle(vehicleType, volumeCm3, fuelType, isVan);
 
   const { JPY_CBR, USD_CBR, EUR_CBR } = await fetchCbrRates();
 
@@ -211,7 +257,14 @@ export async function calculateTurnkeyPrice(params: CalcParams): Promise<CalcRes
   const japanTotalJpy = priceWithExport + inlandJpy;
   const japanTotalRub = Math.round(japanTotalJpy * JPY_BANK);
 
-  const freightUsd = FREIGHT_USD[vehicleType] ?? FREIGHT_USD['car'];
+  // Freight: sanctioned vehicles are routed via third countries at higher fixed rates.
+  let freightUsd: number;
+  if (sanctioned) {
+    const key = isVan ? 'van' : vehicleType;
+    freightUsd = SANCTIONED_FREIGHT_USD[key] ?? SANCTIONED_FREIGHT_USD['car'];
+  } else {
+    freightUsd = FREIGHT_USD[vehicleType] ?? FREIGHT_USD['car'];
+  }
   const freightRub = Math.round(freightUsd * USD_BANK);
 
   const customsValueEur = (priceJPY * JPY_CBR) / EUR_CBR;
@@ -239,6 +292,7 @@ export async function calculateTurnkeyPrice(params: CalcParams): Promise<CalcRes
     utilFeeRub,
     fixedFeesRub,
     finalTotalRub,
+    sanctioned,
     appliedRates: {
       JPY: Math.round(JPY_BANK * RATE_PRECISION) / RATE_PRECISION,
       USD: Math.round(USD_BANK * RATE_PRECISION) / RATE_PRECISION,
