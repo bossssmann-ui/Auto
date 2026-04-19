@@ -334,8 +334,17 @@ export default function Calculator() {
     }
   }
 
+  const MIN_YEAR = 1900
+  const MAX_YEAR = new Date().getFullYear() + 1
+  const yearNum = parseInt(year)
+  const yearError =
+    year.length === 4 && (yearNum < MIN_YEAR || yearNum > MAX_YEAR)
+      ? `Год должен быть от ${MIN_YEAR} до ${MAX_YEAR}`
+      : ''
+
   const canProceedStep2 =
     year.length === 4 &&
+    !yearError &&
     (parseFloat(engineVolume) > 0 || engineType === 'electric') &&
     parseFloat(auctionPrice) > 0 &&
     city.trim().length > 0
@@ -400,7 +409,7 @@ export default function Calculator() {
                   <button
                     key={card.type}
                     type="button"
-                    onClick={() => setVehicleType(card.type)}
+                    onClick={() => { setVehicleType(card.type); setEngineVolume('') }}
                     className={`cursor-pointer rounded-xl border-2 p-5 text-left transition-all hover:-translate-y-0.5 hover:shadow-md ${
                       vehicleType === card.type
                         ? 'border-accent bg-accent/5 shadow-md'
@@ -445,8 +454,11 @@ export default function Calculator() {
                     value={year}
                     onChange={(e) => setYear(e.target.value)}
                     placeholder="2019"
-                    className="w-full rounded-lg border border-surface-dark bg-surface px-4 py-3 text-text-primary placeholder:text-text-secondary/50 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
+                    className={`w-full rounded-lg border bg-surface px-4 py-3 text-text-primary placeholder:text-text-secondary/50 focus:ring-2 focus:outline-none ${yearError ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : 'border-surface-dark focus:border-primary focus:ring-primary/20'}`}
                   />
+                  {yearError && (
+                    <p className="mt-1 text-xs text-red-600">{yearError}</p>
+                  )}
                 </div>
 
                 {/* Engine type */}

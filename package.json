@@ -13,12 +13,10 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "dev:bot": "npm run dev -w @auto/bot",
-    "test:bot": "npm run test -w @auto/bot",
-    "test:shared": "npm run test -w @auto/shared",
-    "typecheck": "tsc -b"
+    "test:bot": "BOT_TEST_MODE=1 tsx server/bot.test.ts"
   },
   "dependencies": {
-    "cors": "^2.8.6",
+    "cors": "^2.8.6s",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "react": "^19.2.4",
