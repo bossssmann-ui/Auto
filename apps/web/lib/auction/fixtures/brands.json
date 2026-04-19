@@ -1,0 +1,87 @@
+[
+  {
+    "slug": "toyota",
+    "name": "Toyota",
+    "models": [
+      { "slug": "harrier", "name": "Harrier", "generations": [
+        { "slug": "xu60", "name": "XU60", "years": [2013, 2020] },
+        { "slug": "xu80", "name": "XU80", "years": [2020, null] }
+      ]},
+      { "slug": "camry", "name": "Camry", "generations": [
+        { "slug": "xv70", "name": "XV70", "years": [2017, 2023] }
+      ]},
+      { "slug": "prius", "name": "Prius", "generations": [
+        { "slug": "zvw50", "name": "ZVW50", "years": [2015, 2022] }
+      ]},
+      { "slug": "alphard", "name": "Alphard", "generations": [
+        { "slug": "ah30", "name": "AH30", "years": [2015, 2023] }
+      ]},
+      { "slug": "land-cruiser-prado", "name": "Land Cruiser Prado", "generations": [
+        { "slug": "j150", "name": "J150", "years": [2009, 2024] }
+      ]}
+    ]
+  },
+  {
+    "slug": "honda",
+    "name": "Honda",
+    "models": [
+      { "slug": "vezel", "name": "Vezel", "generations": [
+        { "slug": "ru", "name": "RU", "years": [2013, 2021] }
+      ]},
+      { "slug": "fit", "name": "Fit", "generations": [
+        { "slug": "gr", "name": "GR", "years": [2020, null] }
+      ]}
+    ]
+  },
+  {
+    "slug": "nissan",
+    "name": "Nissan",
+    "models": [
+      { "slug": "serena", "name": "Serena", "generations": [
+        { "slug": "c27", "name": "C27", "years": [2016, 2022] }
+      ]},
+      { "slug": "leaf", "name": "Leaf", "generations": [
+        { "slug": "ze1", "name": "ZE1", "years": [2017, null] }
+      ]}
+    ]
+  },
+  {
+    "slug": "subaru",
+    "name": "Subaru",
+    "models": [
+      { "slug": "forester", "name": "Forester", "generations": [
+        { "slug": "sk", "name": "SK", "years": [2018, null] }
+      ]}
+    ]
+  },
+  {
+    "slug": "lexus",
+    "name": "Lexus",
+    "models": [
+      { "slug": "rx", "name": "RX", "generations": [
+        { "slug": "al20", "name": "AL20", "years": [2015, 2022] }
+      ]},
+      { "slug": "nx", "name": "NX", "generations": [
+        { "slug": "az20", "name": "AZ20", "years": [2021, null] }
+      ]}
+    ]
+  },
+  {
+    "slug": "mazda",
+    "name": "Mazda",
+    "models": [
+      { "slug": "cx-5", "name": "CX-5", "generations": [
+        { "slug": "kf", "name": "KF", "years": [2017, null] }
+      ]}
+    ]
+  },
+  {
+    "slug": "suzuki",
+    "name": "Suzuki",
+    "models": [
+      { "slug": "hayabusa", "name": "Hayabusa", "generations": [
+        { "slug": "gen3", "name": "Gen 3", "years": [2021, null] }
+      ]}
+    ]
+  }
+]

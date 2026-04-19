@@ -1,7 +1,7 @@
 /**
  * Regression tests for follow-up slot extraction and pending-question logic.
  *
- * Run with: BOT_TEST_MODE=1 npx tsx server/bot.test.ts
+ * Run with: npm run test:bot   (or: BOT_TEST_MODE=1 npx tsx apps/bot/src/bot.test.ts)
  *
  * Tests the exact dialogue from the bug report:
  * Turn 1: "можешь посчитать везела, не проходного, передний привод, самый простой, оценка R тоже можно"

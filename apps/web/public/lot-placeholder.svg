@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" role="img" aria-label="Lot photo placeholder">
+  <rect width="800" height="500" fill="#f5f5f5"/>
+  <g fill="none" stroke="#d4d4d4" stroke-width="1.5">
+    <path d="M120 340 L240 220 L360 280 L480 180 L600 260 L680 220"/>
+    <circle cx="280" cy="360" r="28"/>
+    <circle cx="540" cy="360" r="28"/>
+    <path d="M200 360 L360 360 L400 300 L560 300 L600 360 L680 360"/>
+  </g>
+  <text x="400" y="450" text-anchor="middle" font-family="system-ui, sans-serif" font-size="14" fill="#737373">
+    Фото лота появится после аукциона
+  </text>
+</svg>

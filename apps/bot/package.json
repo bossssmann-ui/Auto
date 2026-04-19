@@ -1,0 +1,15 @@
+{
+  "name": "@auto/bot",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/bot.ts",
+  "scripts": {
+    "dev": "tsx src/bot.ts",
+    "test": "BOT_TEST_MODE=1 tsx src/bot.test.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@auto/shared": "*"
+  }
+}

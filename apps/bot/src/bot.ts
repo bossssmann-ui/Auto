@@ -1,6 +1,7 @@
 import { Telegraf } from "telegraf";
 import "dotenv/config";
-import { calculateTurnkeyPrice, type CalcParams } from "./calculator";
+import { calculateTurnkeyPrice, type CalcParams } from "@auto/shared";
+import { buildCalculatorLink } from "./calculator-link.js";
 
 // ── Cyrillic-aware word boundary fix ─────────────────────
 // JavaScript \b only matches ASCII [a-zA-Z0-9_] boundaries and silently fails
@@ -2487,6 +2488,35 @@ async function getAIResponse(chatId: number, userMessage: string): Promise<strin
       console.warn("⚠️ Reply contradicts parsed state — using deterministic fallback");
       const plan = planReply(mem.state, userMessage);
       reply = buildSafeFallbackReply(mem.state, plan);
+    }
+
+    // Phase 7.6.5 — append a pre-filled web-calculator link on calc-related
+    // turns. Null-safe: helper returns null for non-calc scenarios and for
+    // `special`/`special_vehicle` flows (operator-only). We also skip
+    // appending when the reply already mentions /calculator to avoid double
+    // links if an upstream template or a tool follow-up already inserted one.
+    if (reply && !reply.includes("/calculator")) {
+      const calcLink = buildCalculatorLink({
+        activeIntent: mem.state.activeIntent,
+        stage: mem.state.stage,
+        vehicleTypeHint:
+          mem.state.volumeCm3 != null && mem.state.volumeCm3 > 1900
+            ? "restricted"
+            : undefined,
+        volumeCm3: mem.state.volumeCm3,
+        year: mem.state.year,
+        ageWindow: mem.state.ageWindow,
+        nonPassableType: mem.state.nonPassableType,
+        fuelType: mem.state.fuelType,
+        auctionPriceJPYLow: mem.state.auctionPriceJPY,
+        auctionPriceJPYHigh: mem.state.auctionPriceJPY,
+        isForResale: mem.state.isForResale,
+        isLegalEntity: mem.state.isLegalEntity,
+        bodyText: mem.state.body,
+      });
+      if (calcLink) {
+        reply = `${reply}\n\nОткрыть в калькуляторе: ${calcLink}`;
+      }
     }
 
     // Save user + assistant messages to history only on success
