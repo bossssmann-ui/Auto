@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
-import { BentoGrid } from "@/components/BentoGrid";
-import { BentoTile } from "@/components/BentoTile";
-import { Badge } from "@/components/ui/badge";
+import { Suspense } from "react";
+import { TurnkeyCalculator } from "@/components/Calculator/TurnkeyCalculator";
 
 export const dynamic = "force-static";
 
@@ -21,41 +20,16 @@ export default function CalculatorPage() {
           Калькулятор под ключ
         </h1>
         <p className="max-w-2xl text-muted-foreground">
-          Тот же расчёт, что в нашем Telegram-боте: пошлина, утильсбор, фрахт, фикс. Сан­кционные
+          Тот же расчёт, что в нашем Telegram-боте: пошлина, утильсбор, фрахт, фикс. Санкционные
           коэффициенты для гибридов, электро и ICE &gt; 1900 см³ применяются автоматически.
         </p>
       </div>
 
-      <BentoGrid>
-        <BentoTile colSpan={8} rowSpan={2}>
-          <span className="label">Ввод данных</span>
-          <h2 className="mt-4 font-display text-2xl font-semibold">Форма расчёта</h2>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Реальная форма появится в Phase 6. Она повторит набор полей бота: модель, год / окно
-            возраста, объём, топливо, цена JPY, владение (физ/юр, для перепродажи или в семью).
-          </p>
-          <div className="mt-6 flex flex-wrap gap-2">
-            <Badge variant="outline">@auto/shared</Badge>
-            <Badge variant="outline">ЦБ РФ + spread</Badge>
-            <Badge variant="outline">Санкционный фрахт</Badge>
-          </div>
-        </BentoTile>
-
-        <BentoTile colSpan={4}>
-          <span className="label">Курс · синхронно с ботом</span>
-          <p className="mt-4 text-sm text-muted-foreground">
-            JPY, USD, EUR от ЦБ РФ, плюс банковский спред 4 %. Один и тот же расчёт везде.
-          </p>
-        </BentoTile>
-
-        <BentoTile colSpan={4}>
-          <span className="label">Санкции</span>
-          <p className="mt-4 text-sm text-muted-foreground">
-            Hybrid / EV / ICE &gt;1900 см³ / VAN — автоматически по повышенному фрахту (3500–4000
-            USD). Мотоциклы дороже 600 000 ¥ считаются вручную.
-          </p>
-        </BentoTile>
-      </BentoGrid>
+      {/* Suspense boundary required by Next when a Client Component reads useSearchParams
+          inside a statically rendered route. */}
+      <Suspense fallback={null}>
+        <TurnkeyCalculator />
+      </Suspense>
     </div>
   );
 }

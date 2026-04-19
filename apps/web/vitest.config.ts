@@ -23,7 +23,10 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["lib/**/__tests__/**/*.test.ts"],
+    include: [
+      "lib/**/__tests__/**/*.test.ts",
+      "app/**/__tests__/**/*.test.ts",
+    ],
     environment: "node",
   },
 });
