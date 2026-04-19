@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "dev:bot": "npm run dev -w @auto/bot"
+    "dev:bot": "npm run dev -w @auto/bot",
     "test:bot": "BOT_TEST_MODE=1 tsx server/bot.test.ts"
   },
   "dependencies": {
