@@ -8,11 +8,11 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "dev:bot": "tsx server/bot.ts",
+    "dev:bot": "npm run dev -w @auto/bot"
     "test:bot": "BOT_TEST_MODE=1 tsx server/bot.test.ts"
   },
   "dependencies": {
-    "cors": "^2.8.6",
+    "cors": "^2.8.6s",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "react": "^19.2.4",
