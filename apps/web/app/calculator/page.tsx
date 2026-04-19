@@ -1,6 +1,16 @@
+import type { Metadata } from "next";
 import { BentoGrid } from "@/components/BentoGrid";
 import { BentoTile } from "@/components/BentoTile";
 import { Badge } from "@/components/ui/badge";
+
+export const dynamic = "force-static";
+
+export const metadata: Metadata = {
+  title: "Калькулятор стоимости под ключ",
+  description:
+    "Тот же расчёт, что в Telegram-боте: пошлина, утильсбор, фрахт, фикс. Санкционные коэффициенты применяются автоматически.",
+  alternates: { canonical: "/calculator" },
+};
 
 export default function CalculatorPage() {
   return (

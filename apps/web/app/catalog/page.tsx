@@ -1,14 +1,26 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { BentoGrid } from "@/components/BentoGrid";
 import { LotCard } from "@/components/auction/LotCard";
 import { FilterBar } from "@/components/auction/FilterBar";
 import { Separator } from "@/components/ui/separator";
+import { JsonLd } from "@/components/JsonLd";
+import { breadcrumbJsonLd } from "@/lib/seo";
 import {
   listBrands,
   searchLots,
   type FuelType,
   type AgeWindow,
 } from "@/lib/auction";
+
+export const revalidate = 3600;
+
+export const metadata: Metadata = {
+  title: "Каталог JDM-лотов — аукционы Японии, Кореи, Китая",
+  description:
+    "Аукционные лоты под ключ: фильтрация по бренду, топливу и окну возраста. Цены в рублях рассчитываются автоматически по курсу ЦБ.",
+  alternates: { canonical: "/catalog" },
+};
 
 interface CatalogPageProps {
   searchParams: Promise<{
@@ -52,6 +64,12 @@ export default async function CatalogPage({ searchParams }: CatalogPageProps) {
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-12 lg:px-8 lg:py-16">
+      <JsonLd
+        data={breadcrumbJsonLd([
+          { name: "Главная", url: "/" },
+          { name: "Каталог", url: "/catalog" },
+        ])}
+      />
       <div className="mb-10 space-y-4">
         <span className="label">Catalog</span>
         <h1 className="font-display text-[32px] leading-tight font-semibold md:text-[40px] lg:text-[48px]">

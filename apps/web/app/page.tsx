@@ -1,9 +1,19 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { BentoGrid } from "@/components/BentoGrid";
 import { BentoTile } from "@/components/BentoTile";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+
+export const revalidate = 600;
+
+export const metadata: Metadata = {
+  title: "Импорт авто из Японии, Кореи и Китая под ключ",
+  description:
+    "Аукционные лоты из Японии, Кореи и Китая. Расчёт стоимости под ключ в рублях, собственная логистика через ТЛК Владивосток.",
+  alternates: { canonical: "/" },
+};
 
 export default function HomePage() {
   return (

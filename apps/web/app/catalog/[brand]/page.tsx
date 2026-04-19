@@ -1,15 +1,20 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { BentoGrid } from "@/components/BentoGrid";
 import { BentoTile } from "@/components/BentoTile";
 import { LotCard } from "@/components/auction/LotCard";
 import { Separator } from "@/components/ui/separator";
+import { JsonLd } from "@/components/JsonLd";
+import { breadcrumbJsonLd, itemListJsonLd, ogImageUrl } from "@/lib/seo";
 import {
   AuctionProviderError,
   listBrands,
   listModels,
   searchLots,
 } from "@/lib/auction";
+
+export const revalidate = 3600;
 
 interface Params {
   brand: string;
@@ -19,6 +24,31 @@ export async function generateStaticParams(): Promise<Params[]> {
   // Top-level brand routes are few and stable — materialize all of them.
   const brands = await listBrands();
   return brands.map((b) => ({ brand: b.slug }));
+}
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<Params>;
+}): Promise<Metadata> {
+  const { brand } = await params;
+  const brandEntry = (await listBrands()).find((b) => b.slug === brand);
+  if (!brandEntry) return {};
+  const title = `${brandEntry.name} — JDM-лоты с аукционов Японии`;
+  const description = `Аукционные лоты ${brandEntry.name}: ${brandEntry.modelCount} моделей, цены под ключ в рублях, расчёт по курсу ЦБ.`;
+  const canonical = `/catalog/${brand}`;
+  return {
+    title,
+    description,
+    alternates: { canonical },
+    openGraph: {
+      title,
+      description,
+      url: canonical,
+      images: [{ url: ogImageUrl({ title: brandEntry.name, subtitle: "Каталог JDM-лотов", kind: "category" }) }],
+    },
+    twitter: { card: "summary_large_image", title, description },
+  };
 }
 
 export default async function BrandPage({ params }: { params: Promise<Params> }) {
@@ -46,6 +76,22 @@ export default async function BrandPage({ params }: { params: Promise<Params> })
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-12 lg:px-8 lg:py-16">
+      <JsonLd
+        data={breadcrumbJsonLd([
+          { name: "Главная", url: "/" },
+          { name: "Каталог", url: "/catalog" },
+          { name: brandEntry.name, url: `/catalog/${brand}` },
+        ])}
+      />
+      <JsonLd
+        data={itemListJsonLd(
+          `Модели ${brandEntry.name}`,
+          models.map((m) => ({
+            name: `${brandEntry.name} ${m.name}`,
+            url: `/catalog/${brand}/${m.slug}`,
+          })),
+        )}
+      />
       <nav aria-label="Хлебные крошки" className="label mb-6">
         <Link href="/catalog" className="hover:text-foreground">
           Каталог

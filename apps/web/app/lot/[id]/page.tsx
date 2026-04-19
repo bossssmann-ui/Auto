@@ -1,11 +1,19 @@
 import Image from "next/image";
 import Link from "next/link";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { BentoGrid } from "@/components/BentoGrid";
 import { BentoTile } from "@/components/BentoTile";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { JsonLd } from "@/components/JsonLd";
+import {
+  breadcrumbJsonLd,
+  ogImageUrl,
+  productJsonLd,
+  TELEGRAM_BOT_USERNAME,
+} from "@/lib/seo";
 import { getLot, listAllLotIds } from "@/lib/auction";
 import {
   formatJpy,
@@ -15,17 +23,50 @@ import {
   volumeLabel,
 } from "@/lib/format";
 
+export const revalidate = 300;
+
 interface Params {
   id: string;
 }
-
-const TELEGRAM_BOT_USERNAME =
-  process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME ?? "spectechmash_bot";
 
 export async function generateStaticParams(): Promise<Params[]> {
   const ids: Params[] = [];
   for await (const id of listAllLotIds()) ids.push({ id });
   return ids;
+}
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<Params>;
+}): Promise<Metadata> {
+  const { id } = await params;
+  const lot = await getLot(id);
+  if (!lot) return {};
+  const priceBit = lot.priceRangeRub
+    ? ` — под ключ ${formatPriceRangeRub(lot.priceRangeRub)}`
+    : " — цена по запросу";
+  const title = `${lot.title} (${lot.year})${priceBit}`;
+  const kmBit = lot.mileageKm != null ? `, ${formatKm(lot.mileageKm)}` : "";
+  const gradeBit = lot.auctionGrade != null ? `, grade ${lot.auctionGrade}` : "";
+  const description = `${lot.title}, ${lot.year}${kmBit}${gradeBit}. Аукцион ${lot.auction}, расчёт под ключ в рублях по курсу ЦБ.`;
+  const canonical = `/lot/${lot.id}`;
+  const ogImage = lot.thumbnail && lot.thumbnail.startsWith("http")
+    ? lot.thumbnail
+    : ogImageUrl({ title: lot.title, subtitle: `${lot.year} · ${lot.auction}`, kind: "lot" });
+  return {
+    title,
+    description,
+    alternates: { canonical },
+    openGraph: {
+      type: "website",
+      title,
+      description,
+      url: canonical,
+      images: [{ url: ogImage, width: 1200, height: 630, alt: lot.title }],
+    },
+    twitter: { card: "summary_large_image", title, description, images: [ogImage] },
+  };
 }
 
 export default async function LotPage({ params }: { params: Promise<Params> }) {
@@ -39,6 +80,16 @@ export default async function LotPage({ params }: { params: Promise<Params> }) {
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-12 lg:px-8 lg:py-16">
+      <JsonLd
+        data={breadcrumbJsonLd([
+          { name: "Главная", url: "/" },
+          { name: "Каталог", url: "/catalog" },
+          { name: lot.brandSlug, url: `/catalog/${lot.brandSlug}` },
+          { name: lot.modelSlug, url: `/catalog/${lot.brandSlug}/${lot.modelSlug}` },
+          { name: lot.title, url: `/lot/${lot.id}` },
+        ])}
+      />
+      <JsonLd data={productJsonLd(lot, `/lot/${lot.id}`)} />
       <nav aria-label="Хлебные крошки" className="label mb-6">
         <Link href="/catalog" className="hover:text-foreground">
           Каталог

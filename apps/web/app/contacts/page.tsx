@@ -1,6 +1,14 @@
+import type { Metadata } from "next";
 import { BentoGrid } from "@/components/BentoGrid";
 import { BentoTile } from "@/components/BentoTile";
 import { Button } from "@/components/ui/button";
+
+export const metadata: Metadata = {
+  title: "Контакты — СпецТехМаш",
+  description:
+    "Оставьте заявку менеджеру или напишите в Telegram-бот — круглосуточный расчёт стоимости под ключ.",
+  alternates: { canonical: "/contacts" },
+};
 
 export default function ContactsPage() {
   return (

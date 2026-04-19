@@ -1,6 +1,14 @@
+import type { Metadata } from "next";
 import { BentoGrid } from "@/components/BentoGrid";
 import { BentoTile } from "@/components/BentoTile";
 import { Separator } from "@/components/ui/separator";
+
+export const metadata: Metadata = {
+  title: "О компании — СпецТехМаш · Тихоокеанская Звезда",
+  description:
+    "Импорт авто, мототехники и спецтехники из Японии, Кореи и Китая напрямую с аукционов. Собственная логистика через терминал ТЛК во Владивостоке.",
+  alternates: { canonical: "/about" },
+};
 
 export default function AboutPage() {
   return (

@@ -17,10 +17,13 @@ export default defineConfig({
       "@auto/shared": fileURLToPath(
         new URL("../../packages/shared/src/index.ts", import.meta.url),
       ),
+      // Mirror Next.js' `paths: { "@/*": ["./*"] }` from tsconfig.json so
+      // tests can import app code with the same alias as pages/components.
+      "@": fileURLToPath(new URL("./", import.meta.url)),
     },
   },
   test: {
-    include: ["lib/auction/__tests__/**/*.test.ts"],
+    include: ["lib/**/__tests__/**/*.test.ts"],
     environment: "node",
   },
 });

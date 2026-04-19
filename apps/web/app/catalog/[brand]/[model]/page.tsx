@@ -1,9 +1,12 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { BentoGrid } from "@/components/BentoGrid";
 import { BentoTile } from "@/components/BentoTile";
 import { LotCard } from "@/components/auction/LotCard";
 import { Separator } from "@/components/ui/separator";
+import { JsonLd } from "@/components/JsonLd";
+import { breadcrumbJsonLd, itemListJsonLd, ogImageUrl } from "@/lib/seo";
 import {
   AuctionProviderError,
   listAllCategoryPaths,
@@ -12,6 +15,8 @@ import {
   listModels,
   searchLots,
 } from "@/lib/auction";
+
+export const revalidate = 3600;
 
 interface Params {
   brand: string;
@@ -26,6 +31,34 @@ export async function generateStaticParams(): Promise<Params[]> {
     }
   }
   return out;
+}
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<Params>;
+}): Promise<Metadata> {
+  const { brand, model } = await params;
+  const [brands, models] = await Promise.all([listBrands(), listModels(brand).catch(() => [])]);
+  const brandEntry = brands.find((b) => b.slug === brand);
+  const modelEntry = models.find((m) => m.slug === model);
+  if (!brandEntry || !modelEntry) return {};
+  const full = `${brandEntry.name} ${modelEntry.name}`;
+  const title = `${full} — аукционные лоты из Японии под ключ`;
+  const description = `Поколения и свежие лоты ${full} с японских аукционов. Цены в рублях под ключ рассчитываются автоматически.`;
+  const canonical = `/catalog/${brand}/${model}`;
+  return {
+    title,
+    description,
+    alternates: { canonical },
+    openGraph: {
+      title,
+      description,
+      url: canonical,
+      images: [{ url: ogImageUrl({ title: full, subtitle: "Аукционные лоты", kind: "category" }) }],
+    },
+    twitter: { card: "summary_large_image", title, description },
+  };
 }
 
 export default async function ModelPage({ params }: { params: Promise<Params> }) {
@@ -56,6 +89,25 @@ export default async function ModelPage({ params }: { params: Promise<Params> })
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-12 lg:px-8 lg:py-16">
+      <JsonLd
+        data={breadcrumbJsonLd([
+          { name: "Главная", url: "/" },
+          { name: "Каталог", url: "/catalog" },
+          { name: brandEntry.name, url: `/catalog/${brand}` },
+          { name: modelEntry.name, url: `/catalog/${brand}/${model}` },
+        ])}
+      />
+      {generations.length > 0 && (
+        <JsonLd
+          data={itemListJsonLd(
+            `Поколения ${brandEntry.name} ${modelEntry.name}`,
+            generations.map((g) => ({
+              name: g.name,
+              url: `/catalog/${brand}/${model}/${g.slug}`,
+            })),
+          )}
+        />
+      )}
       <nav aria-label="Хлебные крошки" className="label mb-6">
         <Link href="/catalog" className="hover:text-foreground">
           Каталог
