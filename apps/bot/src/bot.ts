@@ -1,6 +1,6 @@
 import { Telegraf } from "telegraf";
 import "dotenv/config";
-import { calculateTurnkeyPrice, type CalcParams } from "./calculator";
+import { calculateTurnkeyPrice, type CalcParams } from "@auto/shared";
 
 // ── Cyrillic-aware word boundary fix ─────────────────────
 // JavaScript \b only matches ASCII [a-zA-Z0-9_] boundaries and silently fails
