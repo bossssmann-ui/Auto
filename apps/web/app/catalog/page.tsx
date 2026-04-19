@@ -1,17 +1,55 @@
 import Link from "next/link";
 import { BentoGrid } from "@/components/BentoGrid";
-import { BentoTile } from "@/components/BentoTile";
-import { Badge } from "@/components/ui/badge";
+import { LotCard } from "@/components/auction/LotCard";
+import { FilterBar } from "@/components/auction/FilterBar";
 import { Separator } from "@/components/ui/separator";
+import {
+  listBrands,
+  searchLots,
+  type FuelType,
+  type AgeWindow,
+} from "@/lib/auction";
 
-const FILTER_GROUPS: Array<{ label: string; options: string[] }> = [
-  { label: "Бренд", options: ["Toyota", "Honda", "Nissan", "Mazda", "Subaru", "Lexus", "Mitsubishi"] },
-  { label: "Возраст", options: ["до 3 лет", "3–5 лет", "5–7 лет", "старше 7 лет"] },
-  { label: "Объём", options: ["до 1.5 л", "1.5–2.0 л", "2.0–2.5 л", "свыше 2.5 л"] },
-  { label: "Топливо", options: ["Бензин", "Гибрид", "Дизель", "Электро"] },
-];
+interface CatalogPageProps {
+  searchParams: Promise<{
+    brand?: string;
+    fuelType?: string;
+    ageWindow?: string;
+    page?: string;
+  }>;
+}
 
-export default function CatalogPage() {
+const FUEL_TYPES = new Set<FuelType>(["ice", "hybrid", "electric", "diesel"]);
+const AGE_WINDOWS = new Set<AgeWindow>([
+  "passable",
+  "non_passable_under3",
+  "non_passable_over5",
+]);
+
+function asFuelType(v: string | undefined): FuelType | undefined {
+  return v && FUEL_TYPES.has(v as FuelType) ? (v as FuelType) : undefined;
+}
+function asAgeWindow(v: string | undefined): AgeWindow | undefined {
+  return v && AGE_WINDOWS.has(v as AgeWindow) ? (v as AgeWindow) : undefined;
+}
+
+export default async function CatalogPage({ searchParams }: CatalogPageProps) {
+  const sp = await searchParams;
+
+  const brands = await listBrands();
+  const fuelType = asFuelType(sp.fuelType);
+  const ageWindow = asAgeWindow(sp.ageWindow);
+  const page = Math.max(1, parseInt(sp.page ?? "1", 10) || 1);
+
+  const result = await searchLots({
+    brand: sp.brand,
+    fuelType,
+    ageWindow,
+    page,
+    pageSize: 12,
+    sort: "newest",
+  });
+
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-12 lg:px-8 lg:py-16">
       <div className="mb-10 space-y-4">
@@ -20,66 +58,110 @@ export default function CatalogPage() {
           Аукционные лоты
         </h1>
         <p className="max-w-2xl text-muted-foreground">
-          Данные лотов подтягиваются с японских и корейских аукционов. Этот экран —
-          скелет макета: реальный фид появится в следующей фазе.
+          Лоты с японских и корейских аукционов. Цены «под ключ в РФ» считаются
+          автоматически через наш калькулятор по курсу ЦБ.
         </p>
       </div>
 
-      {/* Filter bar placeholder — real URL-state sync comes in Phase 4. */}
-      <div className="mb-8 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
-        {FILTER_GROUPS.map((group) => (
-          <div key={group.label} className="flex items-center gap-2">
-            <span className="label text-foreground">{group.label}</span>
-            <div className="flex flex-wrap gap-1.5">
-              {group.options.slice(0, 3).map((opt) => (
-                <Badge key={opt} variant="outline" className="font-normal">
-                  {opt}
-                </Badge>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
+      <FilterBar
+        brands={brands}
+        selected={{ brand: sp.brand, fuelType, ageWindow: sp.ageWindow }}
+        basePath="/catalog"
+      />
 
-      <BentoGrid>
-        {Array.from({ length: 8 }).map((_, i) => (
-          <BentoTile key={i} colSpan={i === 0 ? 8 : 4} rowSpan={i === 0 ? 2 : 1} interactive>
-            <Link href={`/lot/${1000 + i}`} className="flex h-full flex-col justify-between">
-              <div>
-                <span className="label">JDM · Japan auction</span>
-                <h3 className="mt-4 font-display text-2xl font-semibold">Toyota Harrier 2.5</h3>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  2022 · 4.5 grade · 43 000 km
-                </p>
-              </div>
-              <div className="mt-6">
-                <p className="label">Под ключ в РФ</p>
-                <p className="font-display text-2xl font-semibold tabular-nums">
-                  от 3 850 000 ₽
-                </p>
-              </div>
-            </Link>
-          </BentoTile>
-        ))}
-      </BentoGrid>
+      {result.items.length === 0 ? (
+        <div className="rounded-xl border border-border bg-card p-8 text-center text-muted-foreground">
+          По текущим фильтрам лотов нет. Сбросьте фильтры или попробуйте другой бренд.
+        </div>
+      ) : (
+        <>
+          <BentoGrid>
+            {result.items.map((lot) => (
+              <LotCard key={lot.id} lot={lot} colSpan={4} />
+            ))}
+          </BentoGrid>
+
+          <Pagination
+            page={result.page}
+            pageSize={result.pageSize}
+            total={result.total}
+            searchParams={sp}
+          />
+        </>
+      )}
 
       <Separator className="my-16" />
 
       <div>
-        <span className="label">Популярные направления</span>
+        <span className="label">Популярные бренды</span>
         <ul className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-          {["toyota", "honda", "nissan", "lexus"].map((slug) => (
-            <li key={slug}>
+          {brands.slice(0, 8).map((b) => (
+            <li key={b.slug}>
               <Link
-                href={`/catalog/${slug}`}
-                className="block rounded-lg border border-border bg-card p-4 text-sm capitalize transition-colors hover:bg-muted"
+                href={`/catalog/${b.slug}`}
+                className="block rounded-lg border border-border bg-card p-4 text-sm transition-colors hover:bg-muted"
               >
-                {slug}
+                {b.name}
+                <span className="ml-2 text-xs text-muted-foreground">
+                  · {b.modelCount} моделей
+                </span>
               </Link>
             </li>
           ))}
         </ul>
       </div>
     </div>
+  );
+}
+
+function Pagination({
+  page,
+  pageSize,
+  total,
+  searchParams,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  searchParams: Record<string, string | undefined>;
+}) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  if (pages <= 1) return null;
+
+  const build = (p: number) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(searchParams)) {
+      if (v && k !== "page") qs.set(k, v);
+    }
+    if (p > 1) qs.set("page", String(p));
+    const s = qs.toString();
+    return s ? `/catalog?${s}` : "/catalog";
+  };
+
+  return (
+    <nav
+      aria-label="Pagination"
+      className="mt-10 flex items-center justify-center gap-2"
+    >
+      {page > 1 && (
+        <Link
+          href={build(page - 1)}
+          className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
+        >
+          ← Назад
+        </Link>
+      )}
+      <span className="text-sm text-muted-foreground">
+        Страница {page} из {pages}
+      </span>
+      {page < pages && (
+        <Link
+          href={build(page + 1)}
+          className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
+        >
+          Вперёд →
+        </Link>
+      )}
+    </nav>
   );
 }
