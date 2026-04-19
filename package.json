@@ -3,13 +3,18 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "dev:bot": "tsx server/bot.ts",
-    "test:bot": "BOT_TEST_MODE=1 tsx server/bot.test.ts"
+    "dev:bot": "npm run dev -w @auto/bot",
+    "test:bot": "npm run test -w @auto/bot",
+    "typecheck": "tsc -b"
   },
   "dependencies": {
     "cors": "^2.8.6",
