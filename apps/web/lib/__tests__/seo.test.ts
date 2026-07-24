@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   canonicalUrl,
+  autoDealerJsonLd,
   breadcrumbJsonLd,
   itemListJsonLd,
   organizationJsonLd,
@@ -66,6 +67,38 @@ describe("organizationJsonLd / websiteJsonLd", () => {
     expect(site["@type"]).toBe("WebSite");
     const action = site.potentialAction as { "@type": string };
     expect(action["@type"]).toBe("SearchAction");
+  });
+});
+
+describe("autoDealerJsonLd", () => {
+  it("emits an AutoDealer with RU coverage and a Vladivostok address", () => {
+    const dealer = autoDealerJsonLd();
+    expect(dealer["@type"]).toBe("AutoDealer");
+    expect(dealer.name).toBe("SpecTechMash");
+    expect(dealer.areaServed).toBe("RU");
+    const address = dealer.address as {
+      "@type": string;
+      addressLocality: string;
+      addressCountry: string;
+    };
+    expect(address["@type"]).toBe("PostalAddress");
+    expect(address.addressLocality).toBe("Владивосток");
+    expect(address.addressCountry).toBe("RU");
+    expect(Array.isArray(dealer.sameAs)).toBe(true);
+  });
+
+  it("omits telephone until NEXT_PUBLIC_CONTACT_PHONE is configured", () => {
+    const dealer = autoDealerJsonLd();
+    if (process.env.NEXT_PUBLIC_CONTACT_PHONE) {
+      expect(dealer.telephone).toBe(process.env.NEXT_PUBLIC_CONTACT_PHONE);
+    } else {
+      expect(dealer.telephone).toBeUndefined();
+    }
+  });
+
+  it("never mentions the Pacific Star brand", () => {
+    const json = JSON.stringify(autoDealerJsonLd());
+    expect(json).not.toMatch(/Тихоокеанская|Pacific/);
   });
 });
 

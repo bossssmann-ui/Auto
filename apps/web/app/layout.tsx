@@ -8,6 +8,7 @@ import { JsonLd } from "@/components/JsonLd";
 import {
   ORG,
   SITE_URL,
+  autoDealerJsonLd,
   ogImageUrl,
   organizationJsonLd,
   websiteJsonLd,
@@ -85,6 +86,7 @@ export default function RootLayout({
         ) : null}
         <JsonLd data={organizationJsonLd()} />
         <JsonLd data={websiteJsonLd()} />
+        <JsonLd data={autoDealerJsonLd()} />
       </head>
       <body className="flex min-h-full flex-col bg-background text-foreground">
         <ThemeProvider>

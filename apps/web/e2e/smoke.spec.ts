@@ -130,11 +130,13 @@ test.describe("calculator", () => {
 test.describe("robots and sitemap", () => {
   test.skip(({ isMobile }) => isMobile, "protocol-level, one project is enough");
 
-  test("robots.txt points at the real domain", async ({ request }) => {
+  test("robots.txt points at the real domain and carries Yandex directives", async ({ request }) => {
     const res = await request.get("/robots.txt");
     expect(res.status()).toBe(200);
     const body = await res.text();
-    expect(body).toContain("stm-import.ru");
+    expect(body).toContain("Sitemap: https://stm-import.ru/sitemap.xml");
+    expect(body).toContain("Clean-param: page&fuelType&ageWindow&brand /catalog");
+    expect(body).toContain("Disallow: /api/");
     expect(body).not.toContain("example.com");
     expect(body).not.toContain(".invalid");
   });
