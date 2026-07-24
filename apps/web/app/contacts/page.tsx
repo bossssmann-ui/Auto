@@ -6,7 +6,7 @@ import { ContactLeadForm } from "@/components/Lead/ContactLeadForm";
 import { TELEGRAM_BOT_USERNAME } from "@/lib/seo";
 
 export const metadata: Metadata = {
-  title: "Контакты — СпецТехМаш",
+  title: "Контакты — SpecTechMash (Спецтехмаш)",
   description:
     "Оставьте заявку менеджеру или напишите в Telegram-бот — круглосуточный расчёт стоимости под ключ.",
   alternates: { canonical: "/contacts" },
