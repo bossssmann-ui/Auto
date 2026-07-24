@@ -3,9 +3,19 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import * as React from "react";
+import { MenuIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 
 const NAV_ITEMS: Array<{ href: string; label: string }> = [
   { href: "/catalog", label: "Каталог" },
@@ -21,6 +31,7 @@ const NAV_ITEMS: Array<{ href: string; label: string }> = [
 export function TopNav() {
   const pathname = usePathname();
   const [scrolled, setScrolled] = React.useState(false);
+  const [menuOpen, setMenuOpen] = React.useState(false);
 
   React.useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);
@@ -72,6 +83,58 @@ export function TopNav() {
           <Button asChild size="sm" variant="default" className="hidden sm:inline-flex">
             <Link href="/contacts">Связаться</Link>
           </Button>
+
+          <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+            <SheetTrigger asChild>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="md:hidden"
+                aria-label="Открыть меню"
+                aria-expanded={menuOpen}
+              >
+                <MenuIcon className="size-5" aria-hidden="true" />
+              </Button>
+            </SheetTrigger>
+            <SheetContent side="right" className="w-72">
+              <SheetHeader>
+                <SheetTitle>Меню</SheetTitle>
+                <SheetDescription className="sr-only">
+                  Навигация по разделам сайта
+                </SheetDescription>
+              </SheetHeader>
+              <ul className="flex flex-col gap-1 px-4">
+                {NAV_ITEMS.map((item) => {
+                  const active =
+                    pathname === item.href || pathname?.startsWith(`${item.href}/`);
+                  return (
+                    <li key={item.href}>
+                      <SheetClose asChild>
+                        <Link
+                          href={item.href}
+                          className={cn(
+                            "block rounded-lg px-3 py-2.5 text-base transition-colors duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                            active
+                              ? "bg-muted font-medium text-foreground"
+                              : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                          )}
+                        >
+                          {item.label}
+                        </Link>
+                      </SheetClose>
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="mt-2 px-4">
+                <SheetClose asChild>
+                  <Button asChild className="w-full">
+                    <Link href="/contacts">Связаться</Link>
+                  </Button>
+                </SheetClose>
+              </div>
+            </SheetContent>
+          </Sheet>
         </div>
       </nav>
     </header>
