@@ -1,7 +1,14 @@
 import { Telegraf } from "telegraf";
 import "dotenv/config";
-import { calculateTurnkeyPrice, type CalcParams } from "@auto/shared";
+import { calculateTurnkeyPrice, type CalcParams, type CalcResult } from "@auto/shared";
 import { buildCalculatorLink } from "./calculator-link.js";
+import {
+  normalizeAutoSlang,
+  extractSlangSignals,
+  extractExcludedNegativeFlags,
+  extractSellerClaimSignals,
+  type SellerClaim,
+} from "./slang.js";
 
 // ── Cyrillic-aware word boundary fix ─────────────────────
 // JavaScript \b only matches ASCII [a-zA-Z0-9_] boundaries and silently fails
@@ -26,14 +33,15 @@ function cyrb(re: RegExp): RegExp {
 }
 
 // ── Environment validation ───────────────────────────────
+const isTestMode = !!process.env.BOT_TEST_MODE;
 const token = process.env.AI_BOT_TOKEN;
-if (!token) {
+if (!token && !isTestMode) {
   console.error("❌ AI_BOT_TOKEN is not set in environment variables.");
   process.exit(1);
 }
 
 const openrouterKey = process.env.OPENROUTER_KEY;
-if (!openrouterKey) {
+if (!openrouterKey && !isTestMode) {
   console.error("❌ OPENROUTER_KEY is not set in environment variables.");
   process.exit(1);
 }
@@ -47,30 +55,19 @@ const tools = [{
   type: "function" as const,
   function: {
     name: "calculate_vehicle_price",
-    description:
-      "Рассчитать стоимость авто из Японии. Возвращает цены в рублях. " +
-      "ВАЖНО: fuelType и isVan — ключевые для санкционной логистики (Япония → РФ). " +
-      "Гибриды/электро/ДВС>1900/VAN везутся через третьи страны с повышенным фрахтом.",
+    description: "Рассчитать стоимость импортного авто. Возвращает цены в рублях. Автоматически определяет санкционный статус (ДВС >1900cc, гибрид, EV) и применяет повышенный фрахт через третьи страны.",
     parameters: {
       type: "object",
       properties: {
-        vehicleType: { type: "string", enum: ["car", "jeep", "moto", "special", "restricted"] },
+        vehicleType: { type: "string", enum: ["car", "jeep", "moto", "special", "special_vehicle"] },
         priceJPY: { type: "number" },
         volumeCm3: { type: "number" },
         ageYears: { type: "number" },
         isForResale: { type: "boolean" },
         isLegalEntity: { type: "boolean" },
-        fuelType: {
-          type: "string",
-          enum: ["ice", "hybrid", "electric"],
-          description: "Тип двигателя. 'ice' — бензин/дизель. 'hybrid' — любой гибрид (включая мягкий/PHEV). 'electric' — EV."
-        },
-        isVan: {
-          type: "boolean",
-          description: "Машина относится к категории VAN (Alphard, Hiace, Serena, Noah, Voxy, Stepwgn и т.п.). Для джипов/седанов/хэтчей = false."
-        }
+        fuelType: { type: "string", enum: ["gasoline", "hybrid", "diesel", "ev", "phev"], description: "Тип топлива. Гибриды и EV автоматически санкционные." }
       },
-      required: ["vehicleType", "priceJPY", "volumeCm3", "ageYears", "isForResale", "isLegalEntity", "fuelType"]
+      required: ["vehicleType", "priceJPY", "volumeCm3", "ageYears", "isForResale", "isLegalEntity"]
     }
   }
 }];
@@ -163,6 +160,7 @@ interface ConversationState {
   auctionGradesAllowed: string[];
 
   budgetText: string | null;
+  budgetDeclined: boolean;
   auctionPriceJPY: number | null;
   volumeCm3: number | null;
 
@@ -171,6 +169,7 @@ interface ConversationState {
 
   priority: "cheapest" | "best_condition" | "balanced" | null;
 
+  calculationDone: boolean;
   pendingQuestion: string | null;
   needsClarification: string[];
 
@@ -178,6 +177,17 @@ interface ConversationState {
   turnIndex: number;
 
   slotMeta: Partial<Record<SlotKey, SlotMeta>>;
+
+  // ── Slang-derived fields ──
+  transmission: "manual" | "automatic" | "cvt" | null;
+  condition: "poor" | "decent" | null;
+  hasSunroof: boolean;
+  hasClimate: boolean;
+  manualWindows: boolean;
+  turbo: boolean;
+  noRussiaMileage: boolean;
+  sellerClaims: SellerClaim[];
+  excludedNegativeFlags: string[];
 }
 
 const DEFAULT_CONVERSATION_STATE: ConversationState = {
@@ -200,16 +210,27 @@ const DEFAULT_CONVERSATION_STATE: ConversationState = {
   auctionGradeMin: null,
   auctionGradesAllowed: [],
   budgetText: null,
+  budgetDeclined: false,
   auctionPriceJPY: null,
   volumeCm3: null,
   isForResale: null,
   isLegalEntity: null,
   priority: null,
+  calculationDone: false,
   pendingQuestion: null,
   needsClarification: [],
   lastResolvedModelAlias: null,
   turnIndex: 0,
   slotMeta: {},
+  transmission: null,
+  condition: null,
+  hasSunroof: false,
+  hasClimate: false,
+  manualWindows: false,
+  turbo: false,
+  noRussiaMileage: false,
+  sellerClaims: [],
+  excludedNegativeFlags: [],
 };
 
 /**
@@ -269,6 +290,94 @@ function deriveImpliedState(
       state.slotMeta.nonPassableType = { source: "derived", confidence: "high", turnIndex: state.turnIndex };
     }
   }
+
+  // When ageWindow is explicitly non_passable but nonPassableType is unknown,
+  // and we have a year — derive nonPassableType from the year.
+  // Example: "непроходной" + "2018 год" → 8 years old → over_5_years
+  if (state.year && state.ageWindow === "non_passable" && !state.nonPassableType) {
+    const currentYear = new Date().getFullYear();
+    const age = currentYear - state.year;
+    state.nonPassableType = age < 3 ? "under_3_years" : "over_5_years";
+    state.slotMeta.nonPassableType = { source: "derived", confidence: "high", turnIndex: state.turnIndex };
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// CALC-CRITICAL FIELDS — single source of truth
+// ══════════════════════════════════════════════════════════
+//
+// These are the fields required for ANY vehicle price calculation.
+// The list is model-independent: Prius, Probox, Camry, Nissan X-Trail —
+// all go through the same check.
+//
+// Fields:
+//   1. model          — which car (make is derived)
+//   2. year/ageWindow — vehicle age (year OR age window: passable/non-passable)
+//       2a. nonPassableType — required when ageWindow=non_passable
+//   3. volumeCm3      — engine displacement
+//   4. isForResale     — personal use or resale (affects customs duty)
+//   5. isLegalEntity   — individual or legal entity (affects customs duty)
+//
+// NOT calc-critical: drivetrain, trimLevel, mileage, grade, color,
+// budget/price (bot auto-calculates range when no explicit price given).
+// ══════════════════════════════════════════════════════════
+
+interface MissingCalcField {
+  field: string;
+  question: string;
+}
+
+/**
+ * Centralized check: returns the list of missing calc-critical fields.
+ * Empty array = all fields present = ready to calculate.
+ * Works for ANY model/intent — universal, not tied to specific cars.
+ */
+function getMissingCalcCriticalFields(state: ConversationState): MissingCalcField[] {
+  const missing: MissingCalcField[] = [];
+
+  if (!state.model) {
+    missing.push({ field: "model", question: "какую модель рассматриваете" });
+  }
+
+  // Age: need either an explicit year OR an age window
+  if (state.year == null && state.ageWindow == null) {
+    missing.push({ field: "yearOrAge", question: "какой год или возрастная категория" });
+  }
+
+  // If non-passable age window, must specify which kind
+  if (state.ageWindow === "non_passable" && !state.nonPassableType) {
+    missing.push({ field: "nonPassableType", question: "нужен вариант до 3 лет или старше 5 лет" });
+  }
+
+  // Engine volume
+  if (state.volumeCm3 == null) {
+    missing.push({ field: "volumeCm3", question: "какой объём двигателя" });
+  }
+
+  // Ownership: isForResale + isLegalEntity
+  if (state.isForResale == null && state.isLegalEntity == null) {
+    missing.push({ field: "ownership", question: "оформление на физлицо, юрлицо или под перепродажу" });
+  } else {
+    if (state.isForResale == null) {
+      missing.push({ field: "isForResale", question: "для перепродажи или для себя" });
+    }
+    if (state.isLegalEntity == null) {
+      missing.push({ field: "isLegalEntity", question: "физлицо или юрлицо" });
+    }
+  }
+
+  // Price/budget is NOT calc-critical — bot auto-calculates a range when
+  // no explicit auction price is given.  User may still provide budget
+  // voluntarily, which enables exact calculation.
+
+  return missing;
+}
+
+/**
+ * Convenience: are ALL calc-critical fields present?
+ */
+function hasAllCalcCriticalFields(state: ConversationState): boolean {
+  return getMissingCalcCriticalFields(state).length === 0;
 }
 
 /**
@@ -287,24 +396,21 @@ function computeNeedsClarification(state: ConversationState): string[] {
   }
 
   if (state.activeIntent === "price_calc") {
-    // Не спрашиваем бюджет/цену у клиента — LLM оценивает вилку сам
-    // и вызывает калькулятор с нижней и верхней границей priceJPY.
-    if (state.volumeCm3 == null) {
-      missing.push("volumeCm3");
-    }
-    if (state.year == null && state.ageWindow == null) {
-      missing.push("yearOrAgeWindow");
-    }
-    if (state.isForResale == null) {
-      missing.push("isForResale");
-    }
-    if (state.isLegalEntity == null) {
-      missing.push("isLegalEntity");
+    // Use centralized calc-critical check
+    for (const m of getMissingCalcCriticalFields(state)) {
+      if (!missing.includes(m.field)) {
+        missing.push(m.field);
+      }
     }
   }
 
   return missing;
 }
+
+/**
+ * Derive conversation stage from current state.
+ * Uses centralized calc-critical field check for ready_to_calculate.
+ */
 function deriveStage(state: ConversationState): ConversationStage {
   if (state.activeIntent === "other" && !state.model) {
     return "idle";
@@ -315,17 +421,8 @@ function deriveStage(state: ConversationState): ConversationStage {
   }
 
   if (state.activeIntent === "price_calc") {
-    // ready_to_calculate ONLY if ALL required calc fields exist
-    const hasModel = !!state.model;
-    const hasPrice = state.auctionPriceJPY != null;
-    const hasVolume = state.volumeCm3 != null;
-    const hasAge = state.year != null || state.ageWindow != null;
-    const hasResale = state.isForResale != null;
-    const hasEntity = state.isLegalEntity != null;
-    const nonPassableOk =
-      state.ageWindow !== "non_passable" || state.nonPassableType != null;
-
-    if (hasModel && hasPrice && hasVolume && hasAge && hasResale && hasEntity && nonPassableOk) {
+    // ready_to_calculate ONLY when ALL calc-critical fields are present
+    if (hasAllCalcCriticalFields(state)) {
       return "ready_to_calculate";
     }
     return "collecting_calc_params";
@@ -353,12 +450,15 @@ function buildPendingQuestion(state: ConversationState): string | null {
   }
 
   if (state.stage === "collecting_calc_params") {
-    // Бюджет у клиента не спрашиваем — LLM сам считает вилку.
-    if (!state.volumeCm3) {
-      return "Какой объём двигателя?";
+    // Priority order: model → year → volumeCm3 → isForResale → isLegalEntity → budget (last, skipped if declined)
+    if (!state.model) {
+      return "Какую модель рассматриваете?";
     }
     if (!state.year && !state.ageWindow) {
       return "Какой год выпуска (или проходной/непроходной)?";
+    }
+    if (!state.volumeCm3) {
+      return "Какой объём двигателя?";
     }
     if (state.isForResale == null && state.isLegalEntity == null) {
       return "Авто для себя (физлицо) или на юрлицо / для перепродажи?";
@@ -385,7 +485,6 @@ function buildPendingQuestion(state: ConversationState): string | null {
       if (!state.ageWindow && !state.year) {
         return "Какой возраст интересует — проходной (3–5 лет) или другой?";
       }
-      // Бюджет не спрашиваем — LLM озвучит вилку цены.
       return null;
     }
 
@@ -443,6 +542,34 @@ function buildKnownFiltersSummary(state: ConversationState): string {
   if (state.isLegalEntity != null) parts.push(state.isLegalEntity ? "юрлицо" : "физлицо");
   if (state.mileageText) parts.push(`пробег: ${state.mileageText}`);
 
+  // Slang-derived details
+  if (state.body) parts.push(`кузов: ${state.body}`);
+  if (state.transmission === "manual") parts.push("КПП: механика");
+  else if (state.transmission === "automatic") parts.push("КПП: автомат");
+  else if (state.transmission === "cvt") parts.push("КПП: вариатор");
+  if (state.condition === "poor") parts.push("состояние: плохое");
+  else if (state.condition === "decent") parts.push("состояние: живое");
+  if (state.hasSunroof) parts.push("люк: да");
+  if (state.hasClimate) parts.push("климат-контроль: да");
+  if (state.manualWindows) parts.push("ручные стеклоподъёмники");
+  if (state.turbo) parts.push("турбо");
+  if (state.noRussiaMileage) parts.push("без пробега по РФ");
+  if (state.excludedNegativeFlags.length > 0) {
+    const flagLabels: Record<string, string> = {
+      flood_damage: "не топляк",
+      rollover_history: "не перевёртыш",
+      cut_import: "не распил",
+      constructor_import: "не конструктор",
+      poor_condition: "не убитая",
+    };
+    const labels = state.excludedNegativeFlags.map(f => flagLabels[f] ?? f);
+    parts.push(`исключено: ${labels.join(", ")}`);
+  }
+  if (state.sellerClaims.length > 0) {
+    const claimTexts = state.sellerClaims.map(c => `продавец заявляет: ${c.original}`);
+    parts.push(claimTexts.join("; "));
+  }
+
   return parts.join("; ");
 }
 
@@ -470,39 +597,10 @@ function buildCalcParamsFromState(state: ConversationState): CalcParams | null {
   }
   if (ageYears == null) return null;
 
-  // Determine vehicle type
-  let vehicleType: CalcParams["vehicleType"] = "car";
-  if (state.volumeCm3 > 1900) {
-    vehicleType = "restricted";
-  }
-
-  // Map state.fuelType → calculator fuelType (for sanctions classification)
-  let fuelType: CalcParams["fuelType"];
-  switch (state.fuelType) {
-    case "hybrid":
-    case "phev":
-      fuelType = "hybrid";
-      break;
-    case "ev":
-      fuelType = "electric";
-      break;
-    case "gasoline":
-    case "diesel":
-      fuelType = "ice";
-      break;
-    default:
-      fuelType = undefined; // calculator defaults to 'ice'
-  }
-
-  // VAN detection from body field (best-effort; LLM can override via tool call).
-  // Plain substring check — \b doesn't work reliably with Cyrillic in JS.
-  const bodyLower = (state.body ?? "").toLowerCase();
-  const isVan =
-    bodyLower.includes("van") ||
-    bodyLower.includes("минивэн") ||
-    bodyLower.includes("минивен") ||
-    bodyLower.includes("микроавтобус") ||
-    bodyLower.includes("фургон");
+  // Vehicle type: always "car" for standard passenger vehicles.
+  // "special_vehicle" / "special" should only be set via explicit user intent
+  // (heavy machinery, construction equipment), not derived from engine volume.
+  const vehicleType: CalcParams["vehicleType"] = "car";
 
   return {
     vehicleType,
@@ -511,8 +609,101 @@ function buildCalcParamsFromState(state: ConversationState): CalcParams | null {
     ageYears,
     isForResale: state.isForResale,
     isLegalEntity: state.isLegalEntity,
-    fuelType,
-    isVan,
+    fuelType: toCalcFuel(state.fuelType),
+  };
+}
+
+/**
+ * Map the conversation-state fuel enum to `@auto/shared`'s calculator enum
+ * (used for sanctions classification): gasoline/diesel → ice, phev → hybrid,
+ * ev → electric. `undefined` lets the calculator default to 'ice'.
+ */
+function toCalcFuel(fuel: ConversationState["fuelType"]): CalcParams["fuelType"] {
+  switch (fuel) {
+    case "hybrid":
+    case "phev":
+      return "hybrid";
+    case "ev":
+      return "electric";
+    case "gasoline":
+    case "diesel":
+      return "ice";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Get typical market auction price range (low / high) in JPY
+ * based on engine volume and vehicle age.
+ * Used when user says they don't know the budget — we provide a range.
+ */
+function getMarketPriceRangeJPY(volumeCm3: number, ageYears: number): { low: number; high: number } {
+  // Ranges calibrated to Japanese auction market (2024-2026 data)
+  if (ageYears <= 3) {
+    // Fresh cars — higher prices
+    if (volumeCm3 <= 1500) return { low: 800_000, high: 1_800_000 };
+    if (volumeCm3 <= 1800) return { low: 1_000_000, high: 2_500_000 };
+    return { low: 1_500_000, high: 3_500_000 };
+  }
+  if (ageYears <= 5) {
+    // Passable window (3-5 years)
+    if (volumeCm3 <= 1500) return { low: 400_000, high: 1_200_000 };
+    if (volumeCm3 <= 1800) return { low: 600_000, high: 1_800_000 };
+    return { low: 800_000, high: 2_500_000 };
+  }
+  // Older cars (5+ years)
+  if (volumeCm3 <= 1500) return { low: 150_000, high: 700_000 };
+  if (volumeCm3 <= 1800) return { low: 200_000, high: 1_000_000 };
+  return { low: 300_000, high: 1_500_000 };
+}
+
+/**
+ * Build CalcParams for price range estimation (approximate_guidance mode).
+ * Returns low/high CalcParams. Returns null if required non-price fields are missing.
+ */
+function buildCalcParamsRange(state: ConversationState): { low: CalcParams; high: CalcParams } | null {
+  if (state.volumeCm3 == null) return null;
+  if (state.isForResale == null) return null;
+  if (state.isLegalEntity == null) return null;
+
+  let ageYears: number | null = null;
+  if (state.year != null) {
+    ageYears = new Date().getFullYear() - state.year;
+  } else if (state.ageWindow === "passable") {
+    ageYears = 4;
+  } else if (state.ageWindow === "non_passable" && state.nonPassableType === "under_3_years") {
+    ageYears = 1;
+  } else if (state.ageWindow === "non_passable" && state.nonPassableType === "over_5_years") {
+    ageYears = 7;
+  }
+  if (ageYears == null) return null;
+
+  // Vehicle type: always "car" for standard passenger vehicles.
+  // "special_vehicle" / "special" should only be set via explicit user intent.
+  const vehicleType: CalcParams["vehicleType"] = "car";
+
+  const range = getMarketPriceRangeJPY(state.volumeCm3, ageYears);
+
+  return {
+    low: {
+      vehicleType,
+      priceJPY: range.low,
+      volumeCm3: state.volumeCm3,
+      ageYears,
+      isForResale: state.isForResale,
+      isLegalEntity: state.isLegalEntity,
+      fuelType: toCalcFuel(state.fuelType),
+    },
+    high: {
+      vehicleType,
+      priceJPY: range.high,
+      volumeCm3: state.volumeCm3,
+      ageYears,
+      isForResale: state.isForResale,
+      isLegalEntity: state.isLegalEntity,
+      fuelType: toCalcFuel(state.fuelType),
+    },
   };
 }
 
@@ -520,7 +711,7 @@ function buildCalcParamsFromState(state: ConversationState): CalcParams | null {
  * Deterministic reply planner — runs BEFORE the LLM.
  * Returns a list of questions/instructions to guide the reply.
  * If model is known, never asks about brand/model/type.
- * Asks only the top 1-2 missing fields.
+ * Asks only the top 1 missing field (strictly one question at a time).
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function planReply(state: ConversationState, _userMessage: string): string[] {
@@ -531,26 +722,13 @@ function planReply(state: ConversationState, _userMessage: string): string[] {
     hints.push(`Модель определена: ${state.make ?? ""} ${state.model}. НЕ спрашивай бренд/модель/тип.`);
   }
 
-  // Collect missing critical fields (max 2)
+  // Collect missing critical fields using centralized check (max 1 question at a time)
   const missingCritical: string[] = [];
 
   if (state.activeIntent === "price_calc") {
-    // nonPassableType first — blocks age computation and is quick to answer
-    if (state.ageWindow === "non_passable" && state.nonPassableType == null) {
-      missingCritical.push("непроходной: свежий (до 3 лет) или старый (старше 5 лет)");
-    }
-    // Бюджет у клиента НЕ спрашиваем — LLM сам оценивает вилку цены.
-    if (state.volumeCm3 == null) {
-      missingCritical.push("объём двигателя");
-    }
-    if (state.year == null && state.ageWindow == null) {
-      missingCritical.push("год выпуска или возрастное окно");
-    }
-    if (state.isForResale == null) {
-      missingCritical.push("для перепродажи или нет");
-    }
-    if (state.isLegalEntity == null) {
-      missingCritical.push("физлицо или юрлицо");
+    const missingCalc = getMissingCalcCriticalFields(state);
+    for (const m of missingCalc) {
+      missingCritical.push(m.question);
     }
   } else if (state.activeIntent === "car_search") {
     if (!state.model && !state.make) {
@@ -559,13 +737,12 @@ function planReply(state: ConversationState, _userMessage: string): string[] {
     if (state.year == null && state.ageWindow == null) {
       missingCritical.push("возрастное окно или год");
     }
-    // Бюджет у клиента НЕ спрашиваем — озвучиваем вилку цены сами.
   }
 
-  // Only top 2
-  const top = missingCritical.slice(0, 2);
+  // Only top 1 — strictly one clarifying question at a time
+  const top = missingCritical.slice(0, 1);
   if (top.length > 0) {
-    hints.push(`Спроси ТОЛЬКО: ${top.join(", ")}.`);
+    hints.push(`Спроси ТОЛЬКО: ${top[0]}.`);
   }
 
   return hints;
@@ -662,6 +839,39 @@ function replyContradictsState(reply: string, state: ConversationState): boolean
     if (trimQuestions.some(p => lower.includes(p))) return true;
   }
 
+  // 5. Bot must NEVER ask about budget — it auto-calculates a price range instead
+  {
+    const budgetQuestions = [
+      "какой бюджет", "какой ориентир по бюджету",
+      "какой бюджет или цена", "какая сумма",
+      "в каком бюджете", "на какую сумму",
+      "сколько готовы потратить", "сколько планируете",
+    ];
+    if (budgetQuestions.some(p => lower.includes(p))) return true;
+  }
+
+  // 6. If nonPassableType known, reply should not re-ask about it
+  if (state.nonPassableType) {
+    const ageQuestions = [
+      "свежий или старый", "до 3 лет или старше 5",
+      "нужен вариант до 3 лет или старше",
+      "свежий (до 3 лет) или старше",
+      "какой непроходной",
+    ];
+    if (ageQuestions.some(p => lower.includes(p))) return true;
+  }
+
+  // 7. If isForResale and isLegalEntity are both known, reply should not re-ask about ownership
+  if (state.isForResale != null && state.isLegalEntity != null) {
+    const ownershipQuestions = [
+      "физлицо или юрлицо", "юрлицо или физлицо",
+      "для перепродажи или для себя", "для себя или для перепродажи",
+      "оформление на физлицо",
+      "физлицо, юрлицо или под перепродажу",
+    ];
+    if (ownershipQuestions.some(p => lower.includes(p))) return true;
+  }
+
   return false;
 }
 
@@ -671,7 +881,7 @@ function replyContradictsState(reply: string, state: ConversationState): boolean
  * Confirms known slots and asks only calc-critical missing fields.
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-function buildSafeFallbackReply(state: ConversationState, _plan: string[]): string {
+async function buildSafeFallbackReply(state: ConversationState, _plan: string[]): Promise<string> {
   const parts: string[] = [];
 
   // ── Collect known filter descriptions ──
@@ -704,7 +914,8 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
   else if (state.fuelType === "ev") knownParts.push("электро");
 
   if (state.color) knownParts.push(state.color);
-  if (state.budgetText) knownParts.push(`бюджет: ${state.budgetText}`);
+  if (state.budgetText && state.budgetText !== "approximate_guidance") knownParts.push(`бюджет: ${state.budgetText}`);
+  if (state.budgetText === "approximate_guidance" || state.budgetDeclined) knownParts.push("рассчитаю по среднерыночным ценам");
   if (state.auctionPriceJPY) knownParts.push(`аукц. цена: ${state.auctionPriceJPY} йен`);
   if (state.volumeCm3) knownParts.push(`объём: ${state.volumeCm3} см³`);
   if (state.isForResale != null) knownParts.push(state.isForResale ? "для перепродажи" : "для себя");
@@ -712,6 +923,35 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
   // Only show priority if it adds info beyond trimLevel
   if (state.priority === "cheapest" && state.trimLevel !== "base") knownParts.push("подешевле");
   else if (state.priority === "best_condition") knownParts.push("лучшее состояние");
+
+  // Slang-derived details in confirmation
+  if (state.body) knownParts.push(`кузов: ${state.body}`);
+  if (state.transmission === "manual") knownParts.push("механика");
+  else if (state.transmission === "automatic") knownParts.push("автомат");
+  else if (state.transmission === "cvt") knownParts.push("вариатор");
+  if (state.hasSunroof) knownParts.push("с люком");
+  if (state.hasClimate) knownParts.push("климат-контроль");
+  if (state.manualWindows) knownParts.push("ручные стеклоподъёмники");
+  if (state.turbo) knownParts.push("турбо");
+  if (state.noRussiaMileage) knownParts.push("без пробега по РФ");
+  if (state.condition === "decent") knownParts.push("живое состояние");
+  if (state.excludedNegativeFlags.length > 0) {
+    const flagLabels: Record<string, string> = {
+      flood_damage: "не топляк",
+      rollover_history: "не перевёртыш",
+      cut_import: "не распил",
+      constructor_import: "не конструктор",
+      poor_condition: "не убитая",
+    };
+    const labels = state.excludedNegativeFlags.map(f => flagLabels[f] ?? f);
+    knownParts.push(labels.join(", "));
+  }
+  // Seller claims — cautious language
+  if (state.sellerClaims.length > 0) {
+    for (const claim of state.sellerClaims) {
+      knownParts.push(`продавец заявляет: ${claim.original}`);
+    }
+  }
 
   // ── Build confirmation line ──
   const modelName = state.model
@@ -726,25 +966,19 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
     parts.push(`Понял: ${knownParts.join(", ")}.`);
   }
 
-  // ── Build missing calc-critical fields ──
+  // ── Build missing calc-critical fields (centralized) ──
+  //
+  // UNIVERSAL RULE: "Сейчас рассчитаю" is ONLY allowed when
+  // hasAllCalcCriticalFields(state) === true. Otherwise, ask the
+  // top-priority missing question. This works for ANY car model.
+  const isBudgetGuidanceMode = state.budgetText === "approximate_guidance" || state.budgetDeclined;
+  const missingCalcFields = getMissingCalcCriticalFields(state);
   const missingQuestions: string[] = [];
 
-  if (state.activeIntent === "price_calc") {
-    if (state.ageWindow === "non_passable" && !state.nonPassableType) {
-      missingQuestions.push("нужен вариант до 3 лет или старше 5 лет");
-    }
-    if (!state.year && !state.ageWindow) {
-      missingQuestions.push("какой год или возрастная категория");
-    }
-    // Бюджет у клиента не спрашиваем — LLM сам озвучит вилку цены.
-    if (!state.volumeCm3) {
-      missingQuestions.push("какой объём двигателя");
-    }
-    if (state.isForResale == null && state.isLegalEntity == null) {
-      missingQuestions.push("оформление на физлицо, юрлицо или под перепродажу");
-    } else {
-      if (state.isForResale == null) missingQuestions.push("для перепродажи или для себя");
-      if (state.isLegalEntity == null) missingQuestions.push("физлицо или юрлицо");
+  // When in price_calc mode OR budget guidance is active, use centralized check
+  if (isBudgetGuidanceMode || state.activeIntent === "price_calc") {
+    for (const m of missingCalcFields) {
+      missingQuestions.push(m.question);
     }
   } else if (state.activeIntent === "car_search") {
     if (!state.model && !state.make) {
@@ -753,16 +987,84 @@ function buildSafeFallbackReply(state: ConversationState, _plan: string[]): stri
     if (!state.year && !state.ageWindow) {
       missingQuestions.push("какой возраст или год");
     }
-    // Бюджет не спрашиваем — отвечаем вилкой цены.
   }
 
   if (missingQuestions.length > 0) {
-    parts.push(`Уточни, пожалуйста: ${missingQuestions.join(", ")}.`);
-  } else if (state.stage === "ready_to_calculate") {
-    parts.push("Все данные есть, сейчас посчитаю.");
+    // NOT ready — ask strictly ONE question at a time.
+    // NEVER say "Сейчас рассчитаю" when fields are missing.
+    parts.push(`Уточни, пожалуйста: ${missingQuestions[0]}.`);
+  } else if (state.calculationDone) {
+    if (state.auctionPriceJPY == null) {
+      parts.push("Расчёт по среднерыночным ценам уже выполнен. Если хотите уточнить — напишите новые параметры.");
+    } else {
+      parts.push("Расчёт уже выполнен. Если хотите пересчитать с другими параметрами — напишите новые данные.");
+    }
+  } else if (hasAllCalcCriticalFields(state)) {
+    // ALL fields present — safe to promise calculation
+    if (state.auctionPriceJPY != null) {
+      parts.push("Все данные есть, сейчас посчитаю.");
+    } else {
+      parts.push("Сейчас рассчитаю по среднерыночным ценам и дам диапазон стоимости.");
+    }
   }
 
-  return parts.join(" ") || "Расскажите подробнее, что именно вас интересует?";
+  return parts.join("\n\n") || "Расскажите подробнее, что именно вас интересует?";
+}
+
+/** Format a single exact CalcResult as a human-readable Russian reply */
+function formatCalcResultReply(state: ConversationState, result: CalcResult): string {
+  if (!result.success) {
+    return result.message;
+  }
+  const modelName = state.make ? `${state.make} ${state.model}` : state.model ?? "автомобиль";
+  const fmt = (n: number) => n.toLocaleString("ru");
+  const lines: string[] = [];
+  lines.push(`Расчёт стоимости ${modelName} «под ключ»:\n`);
+  lines.push(`• Авто в Японии (с внутренней доставкой): ${fmt(result.japanTotalRub)} ₽`);
+  if (result.sanctioned) {
+    lines.push(`• Фрахт через третьи страны (санкционный авто): ${fmt(result.freightRub)} ₽`);
+  } else {
+    lines.push(`• Фрахт до Владивостока: ${fmt(result.freightRub)} ₽`);
+  }
+  lines.push(`• Таможенная пошлина + акциз + НДС: ${fmt(result.customsDutyRub)} ₽`);
+  lines.push(`• Утилизационный сбор: ${fmt(result.utilFeeRub)} ₽`);
+  lines.push(`• Брокер + СВХ + СБКТС + прочие: ${fmt(result.fixedFeesRub)} ₽`);
+  lines.push(`\n💰 Итого «под ключ» во Владивостоке: ${fmt(result.finalTotalRub)} ₽`);
+  if (result.sanctioned) {
+    lines.push(`\n⚠️ Авто попадает под японские санкции (с августа 2023). Доставка через третьи страны — фрахт увеличен.`);
+  }
+  lines.push(`\nЕсли нужно — могу пересчитать с другими параметрами.`);
+  return lines.join("\n");
+}
+
+/** Format a range (low/high) CalcResult pair as a human-readable Russian reply */
+function formatRangeCalcResultReply(
+  state: ConversationState,
+  rangeParams: { low: CalcParams; high: CalcParams },
+  lowResult: CalcResult,
+  highResult: CalcResult,
+): string {
+  const modelName = state.make ? `${state.make} ${state.model}` : state.model ?? "автомобиль";
+  const fmt = (n: number) => n.toLocaleString("ru");
+
+  if (!lowResult.success) return lowResult.message;
+  if (!highResult.success) return highResult.message;
+
+  const sanctioned = lowResult.sanctioned;
+
+  const lines: string[] = [];
+  lines.push(`Расчёт стоимости ${modelName} «под ключ» по среднерыночным ценам:\n`);
+  if (sanctioned) {
+    lines.push(`⚠️ Авто попадает под японские санкции — фрахт через третьи страны.\n`);
+  }
+  lines.push(`Аукционная цена от ${fmt(rangeParams.low.priceJPY)} до ${fmt(rangeParams.high.priceJPY)} йен.\n`);
+  lines.push(`📉 Нижняя граница (${fmt(rangeParams.low.priceJPY)} йен):`);
+  lines.push(`  Итого «под ключ»: ${fmt(lowResult.finalTotalRub)} ₽\n`);
+  lines.push(`📈 Верхняя граница (${fmt(rangeParams.high.priceJPY)} йен):`);
+  lines.push(`  Итого «под ключ»: ${fmt(highResult.finalTotalRub)} ₽`);
+  lines.push(`\nТочная стоимость зависит от аукционной цены конкретного лота.`);
+  lines.push(`Если нужно — могу пересчитать с конкретной ценой.`);
+  return lines.join("\n");
 }
 
 interface ConversationEntry {
@@ -776,15 +1078,17 @@ const conversations = new Map<number, ConversationEntry>();
 const MAX_RECENT_MESSAGES = 6; // 3 user/assistant pairs
 const CONVERSATION_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-/** Evict stale conversations periodically */
-setInterval(() => {
-  const now = Date.now();
-  for (const [userId, entry] of conversations) {
-    if (now - entry.lastActivity > CONVERSATION_TTL_MS) {
-      conversations.delete(userId);
+/** Evict stale conversations periodically (skip in test mode to avoid hanging) */
+if (!isTestMode) {
+  setInterval(() => {
+    const now = Date.now();
+    for (const [userId, entry] of conversations) {
+      if (now - entry.lastActivity > CONVERSATION_TTL_MS) {
+        conversations.delete(userId);
+      }
     }
-  }
-}, 10 * 60 * 1000); // every 10 minutes
+  }, 10 * 60 * 1000); // every 10 minutes
+}
 
 function getMemory(userId: number): ConversationEntry {
   let entry = conversations.get(userId);
@@ -856,6 +1160,7 @@ function clearStateForModelSwitch(previous: ConversationState): ConversationStat
     auctionPriceJPY: null,
     volumeCm3: null,
     priority: null,
+    calculationDone: false,
     pendingQuestion: null,
     needsClarification: [],
     // budgetText, isForResale, isLegalEntity are preserved via spread
@@ -917,13 +1222,20 @@ function applyStateUpdate(
   const { set: current, clearFields } = update;
 
   // ── Intent resolution ──
+  // "price_calc" is sticky: once the user says "посчитай", adding more filters
+  // (which auto-infers "car_search") should NOT downgrade the intent.
+  // Only an explicit new intent (price_calc, auction_explanation) can override.
   const currentIntent = current.activeIntent ?? "other";
-  const effectiveIntent =
-    currentIntent === "other" && previous.model != null
-      ? previous.activeIntent
-      : currentIntent !== "other"
-        ? currentIntent
-        : previous.activeIntent;
+  let effectiveIntent: ConversationState["activeIntent"];
+  if (currentIntent === "other") {
+    // No explicit intent in this message — keep previous
+    effectiveIntent = previous.activeIntent;
+  } else if (currentIntent === "car_search" && previous.activeIntent === "price_calc") {
+    // Don't downgrade price_calc to car_search — user just added more filters
+    effectiveIntent = "price_calc";
+  } else {
+    effectiveIntent = currentIntent;
+  }
 
   // Helper: pick current value if non-null/undefined, otherwise keep previous
   const pick = <T>(prev: T | null, cur: T | null | undefined): T | null =>
@@ -991,6 +1303,20 @@ function applyStateUpdate(
     return [...set];
   };
 
+  // Merge seller claims by meaning (deduplicated by meaning field)
+  const mergeSellerClaims = (prev: SellerClaim[], cur: SellerClaim[]): SellerClaim[] => {
+    if (cur.length === 0) return prev;
+    const seen = new Set(prev.map(c => c.meaning));
+    const merged = [...prev];
+    for (const claim of cur) {
+      if (!seen.has(claim.meaning)) {
+        merged.push(claim);
+        seen.add(claim.meaning);
+      }
+    }
+    return merged;
+  };
+
   // For model/make: never erase if current omitted them
   const model = current.model ?? base.model;
   const make = current.make ?? base.make;
@@ -1016,16 +1342,28 @@ function applyStateUpdate(
     auctionGradeMin: pick(base.auctionGradeMin, current.auctionGradeMin),
     auctionGradesAllowed: mergeArrays(base.auctionGradesAllowed, current.auctionGradesAllowed),
     budgetText: pick(base.budgetText, current.budgetText),
+    budgetDeclined: current.budgetDeclined || base.budgetDeclined,
     auctionPriceJPY: pick(base.auctionPriceJPY, current.auctionPriceJPY),
     volumeCm3: pick(base.volumeCm3, current.volumeCm3),
     isForResale: pick(base.isForResale, current.isForResale),
     isLegalEntity: pick(base.isLegalEntity, current.isLegalEntity),
     priority: pick(base.priority, current.priority),
+    calculationDone: base.calculationDone,
     pendingQuestion: null, // will be recomputed
     needsClarification: [], // will be recomputed
     lastResolvedModelAlias: current.lastResolvedModelAlias ?? base.lastResolvedModelAlias,
     turnIndex: nextTurn,
     slotMeta: mergedSlotMeta,
+    // Slang-derived fields
+    transmission: pick(base.transmission, current.transmission),
+    condition: pick(base.condition, current.condition),
+    hasSunroof: current.hasSunroof || base.hasSunroof,
+    hasClimate: current.hasClimate || base.hasClimate,
+    manualWindows: current.manualWindows || base.manualWindows,
+    turbo: current.turbo || base.turbo,
+    noRussiaMileage: current.noRussiaMileage || base.noRussiaMileage,
+    sellerClaims: mergeSellerClaims(base.sellerClaims, current.sellerClaims ?? []),
+    excludedNegativeFlags: mergeArrays(base.excludedNegativeFlags, current.excludedNegativeFlags ?? []),
   };
 
   // ── Step 5–7: Post-merge pipeline ──
@@ -1038,6 +1376,20 @@ function applyStateUpdate(
   merged.needsClarification = computeNeedsClarification(merged);
   merged.stage = deriveStage(merged);
   merged.pendingQuestion = buildPendingQuestion(merged);
+
+  // ── Reset calculationDone when calc-critical fields change ──
+  if (merged.calculationDone) {
+    const calcCriticalKeys: Array<keyof typeof current> = [
+      "auctionPriceJPY", "volumeCm3", "isForResale", "isLegalEntity",
+      "year", "ageWindow", "nonPassableType", "model",
+    ];
+    const calcFieldChanged = calcCriticalKeys.some(k =>
+      current[k] !== undefined && current[k] !== null,
+    );
+    if (calcFieldChanged || isModelSwitch) {
+      merged.calculationDone = false;
+    }
+  }
 
   return merged;
 }
@@ -1072,10 +1424,9 @@ async function summarizeMemory(
       ? `Existing summary:\n${previousSummary}\n\nNew messages:\n${transcript}`
       : `Messages:\n${transcript}`,
     "",
-    "Compress this conversation into a short factual memory for a Japanese car import sales assistant.",
+    "Compress this conversation into a short factual memory for a vehicle import sales assistant.",
     "Keep only durable facts:",
     "- requested car models and nicknames",
-    "- budget",
     "- passable/non-passable age preference",
     "- drivetrain",
     "- hybrid/turbo preference",
@@ -1112,7 +1463,7 @@ async function summarizeMemory(
       return previousSummary;
     }
 
-    const data: OpenRouterResponse = await response.json();
+    const data = (await response.json()) as OpenRouterResponse;
     const text = data?.choices?.[0]?.message?.content;
     if (typeof text === "string" && text.trim().length > 0) {
       return text.trim();
@@ -1239,9 +1590,95 @@ function extractStateUpdate(
   userMessage: string,
   previousState: ConversationState,
 ): StateUpdate {
-  const msg = userMessage.toLowerCase().replace(/ё/g, "е");
+  // ── Slang normalization pass ──
+  // Apply auto-slang normalization BEFORE lowering — preserves case for model matching
+  const slangNormalized = normalizeAutoSlang(userMessage);
+
+  let msg = slangNormalized.toLowerCase().replace(/ё/g, "е");
+
+  // ── Russian numeric word normalization ──
+  // Normalize Russian number words to digits so downstream regexes work uniformly.
+  msg = msg
+    .replace(/(?<![а-яА-Яa-zA-Z])полторашк[а-яё]*/gi, "1.5 л")
+    .replace(/(?<![а-яА-Яa-zA-Z])полтора(?![а-яА-Яa-zA-Z])/gi, "1.5")
+    .replace(/(?<![а-яА-Яa-zA-Z])трех(?:летк[а-яё]*)/gi, "до 3 лет")
+    .replace(/(?<![а-яА-Яa-zA-Z])(?:трех|трёх)(?![а-яА-Яa-zA-Z])/gi, "3")
+    .replace(/(?<![а-яА-Яa-zA-Z])(?:пяти|пять)(?![а-яА-Яa-zA-Z])/gi, "5");
+
   const update: Partial<ConversationState> = {};
   const clearFields: ClearableField[] = [];
+
+  // ── Extract slang signals from the ORIGINAL text (before normalization) ──
+  const slangSignals = extractSlangSignals(userMessage);
+  const sellerClaims = extractSellerClaimSignals(userMessage);
+  const excludedNegFlags = extractExcludedNegativeFlags(userMessage);
+
+  // Apply slang signals to update (only if detected)
+  if (slangSignals.transmission) {
+    update.transmission = slangSignals.transmission;
+  }
+  if (slangSignals.drivetrain) {
+    update.drivetrain = slangSignals.drivetrain;
+  }
+  if (slangSignals.trimLevel) {
+    update.trimLevel = slangSignals.trimLevel;
+  }
+  if (slangSignals.fuelType) {
+    update.fuelType = slangSignals.fuelType;
+  }
+  if (slangSignals.steering) {
+    update.steering = slangSignals.steering;
+  }
+  if (slangSignals.body) {
+    update.body = slangSignals.body;
+  }
+  if (slangSignals.condition) {
+    update.condition = slangSignals.condition;
+  }
+  if (slangSignals.hasSunroof) {
+    update.hasSunroof = true;
+  }
+  if (slangSignals.hasClimate) {
+    update.hasClimate = true;
+  }
+  if (slangSignals.manualWindows) {
+    update.manualWindows = true;
+  }
+  if (slangSignals.turbo) {
+    update.turbo = true;
+  }
+  if (slangSignals.noRussiaMileage) {
+    update.noRussiaMileage = true;
+  }
+  if (slangSignals.engineVolume) {
+    update.volumeCm3 = Math.round(slangSignals.engineVolume * 1000);
+  }
+  if (slangSignals.isForResale != null) {
+    update.isForResale = slangSignals.isForResale;
+  }
+  if (slangSignals.isLegalEntity != null) {
+    update.isLegalEntity = slangSignals.isLegalEntity;
+  }
+  if (slangSignals.priority === "cheapest") {
+    update.priority = "cheapest";
+  } else if (slangSignals.priority === "better_condition") {
+    update.priority = "best_condition";
+  }
+  if (slangSignals.color) {
+    update.color = slangSignals.color;
+  }
+  if (slangSignals.budgetGuidance) {
+    update.budgetText = "approximate_guidance";
+    update.budgetDeclined = true;
+    // Requesting pricing implies price_calc intent
+    update.activeIntent = "price_calc";
+  }
+  if (sellerClaims.length > 0) {
+    update.sellerClaims = sellerClaims;
+  }
+  if (excludedNegFlags.length > 0) {
+    update.excludedNegativeFlags = excludedNegFlags;
+  }
 
   // ── Deterministic clear rules ──
   if (/(?:цвет\s+не\s*важ|любой\s+цвет|без\s+разницы\s+по\s+цвету)/i.test(msg)) {
@@ -1300,9 +1737,9 @@ function extractStateUpdate(
   // Age window
   if (/(?:не\s*проходн|непроходн)/i.test(msg)) {
     update.ageWindow = "non_passable";
-    if (/свеж/i.test(msg)) {
+    if (/(?:свеж|до\s*(?:3|тр[её]х)|младше\s*(?:3|тр[её]х)|менее\s*(?:3|тр[её]х)|не\s*старше\s*(?:3|тр[её]х)|молод)/i.test(msg)) {
       update.nonPassableType = "under_3_years";
-    } else if (/стар/i.test(msg)) {
+    } else if (/(?:стар(?:ый)?\s*фонд|стар|(?:от|старше|свыше|более|больше)\s*(?:5|пяти))/i.test(msg)) {
       update.nonPassableType = "over_5_years";
     } else if (!previousState.nonPassableType) {
       // nonPassableType will be detected by computeNeedsClarification
@@ -1311,11 +1748,27 @@ function extractStateUpdate(
     update.ageWindow = "passable";
   }
 
-  // Context-aware: standalone "свежий"/"старше" when nonPassableType is pending clarification
-  if (previousState.ageWindow === "non_passable" && !previousState.nonPassableType && !update.nonPassableType && !update.ageWindow) {
-    if (/(?:свеж|до\s*3|менее\s*3|младше\s*3|молод)/i.test(msg)) {
+  // Context-aware: standalone "свежий"/"старше"/"до 3 лет" when ageWindow is already non_passable.
+  // Allows overriding a previously set nonPassableType (e.g., user changes from "до 3 лет" to "старше 5 лет").
+  // Negation guard: "не старый" ≠ "старый", "не свежий" ≠ "свежий".
+  if (previousState.ageWindow === "non_passable" && !update.nonPassableType && !update.ageWindow) {
+    if (/(?:свеж|помоложе|до\s*(?:3\s*(?:-?\s*х)?|тр[её]х)|менее\s*(?:3|тр[её]х)|младше\s*(?:3|тр[её]х)|не\s*старше\s*(?:3|тр[её]х)|молод)/i.test(msg) && !/не\s+свеж/i.test(msg)) {
       update.nonPassableType = "under_3_years";
-    } else if (/(?:стар|больше\s*5|более\s*5|старше\s*5|свыше\s*5)/i.test(msg)) {
+    } else if (/(?:стар(?:ый|ее|ше)?\s*фонд|стар(?:ше|ый|ее|ую|ое)?(?:\s|,|$)|больше\s*(?:5|пяти)|более\s*(?:5|пяти)|старше\s*(?:5|пяти)|свыше\s*(?:5|пяти)|от\s*(?:5|пяти)|5\s*\+)/i.test(msg) && !/не\s+стар/i.test(msg)) {
+      update.nonPassableType = "over_5_years";
+    }
+  }
+
+  // Standalone nonPassableType detection (even without "непроходной" in this message):
+  // When the user says "до 3 лет" or "от 5 лет" alone, infer both ageWindow + nonPassableType.
+  // Also allows overriding a previously set nonPassableType when user explicitly changes their mind.
+  // Added "помоложе" for "younger" intent.
+  if (!update.ageWindow && !update.nonPassableType) {
+    if (/(?:до\s*(?:3\s*(?:-?\s*х)?|тр[её]х)\s*лет|младше\s*(?:3|тр[её]х)(?:\s*лет)?|не\s*старше\s*(?:3|тр[её]х)(?:\s*лет)?|свежи[йея]|помоложе)/i.test(msg) && !/не\s+свеж/i.test(msg)) {
+      update.ageWindow = "non_passable";
+      update.nonPassableType = "under_3_years";
+    } else if (/(?:(?:от|старше|свыше|более|больше)\s*(?:5|пяти)\s*(?:-?\s*и)?\s*лет|5\s*\+\s*лет|старше\s*(?:5|пяти)|стар(?:ый)?\s*фонд)/i.test(msg) && !/не\s+стар/i.test(msg)) {
+      update.ageWindow = "non_passable";
       update.nonPassableType = "over_5_years";
     }
   }
@@ -1353,16 +1806,20 @@ function extractStateUpdate(
   }
 
   // Trim level
-  if (/(?:самый\s+простой|попроще|(?<![а-яёА-ЯЁa-zA-Z0-9])база(?![а-яёА-ЯЁa-zA-Z0-9])|базов)/i.test(msg)) {
+  // "средняя стоимость" / "средняя цена" are price inquiries, NOT trim level.
+  // Only set trimLevel when "средн" is about комплектация, not about price/cost.
+  const SREDNYAYA_PRICE_RE = /средн[а-яё]*\s+(?:стоимост|цен[а-яё]*|бюджет)/i;
+  const BASE_TRIM_RE = /(?:сам(?:ый|ая)\s+прост(?:ой|ая)|попроще|(?<![а-яёА-ЯЁa-zA-Z0-9])база(?![а-яёА-ЯЁa-zA-Z0-9])|базов)/i;
+  if (BASE_TRIM_RE.test(msg)) {
     update.trimLevel = "base";
-  } else if (/(?:средн(?:яя|ий|ее)|средн(?:\s|$))/i.test(msg)) {
+  } else if (/(?:средн(?:яя|ий|ее)|средн(?:\s|$))/i.test(msg) && !SREDNYAYA_PRICE_RE.test(msg)) {
     update.trimLevel = "mid";
   } else if (/(?:максималк|максимальн|(?<![а-яёА-ЯЁa-zA-Z0-9])макс(?![а-яёА-ЯЁa-zA-Z0-9])|жирн)/i.test(msg)) {
     update.trimLevel = "top";
   }
 
   // Priority
-  if (/(?:подешевле|главное\s+дешевле|попроще.*цен|бюджетн|самый\s+простой)/i.test(msg)) {
+  if (/(?:подешевле|главное\s+дешевле|попроще.*цен|бюджетн)/i.test(msg) || BASE_TRIM_RE.test(msg)) {
     update.priority = "cheapest";
   } else if (/(?:главное\s+живой|получше\s+состояни|хорош(?:ее|ий)\s+состояни)/i.test(msg)) {
     update.priority = "best_condition";
@@ -1371,21 +1828,23 @@ function extractStateUpdate(
   }
 
   // Resale / legal entity
-  // "для себя" implies both personal use (not for resale) and physical entity
-  if (/(?:для\s+себя)/i.test(msg)) {
+  // "для себя" / "в семью" implies both personal use (not for resale) and physical entity
+  if (/(?:для\s+себя|в\s+семью|для\s+семьи|себе\s+(?:авто|машин[а-яё]*))/i.test(msg)) {
     update.isForResale = false;
     update.isLegalEntity = false;
   }
   // Check negation BEFORE positive to avoid "не для перепродажи" matching positive
   if (/(?:не\s+(?:для\s+)?перепродаж|не\s+на\s+продажу|не\s+для\s+продажи)/i.test(msg)) {
     update.isForResale = false;
-  } else if (/(?:перепродаж|на\s+продажу|для\s+продажи)/i.test(msg)) {
+  } else if (/(?:перепродаж|на\s+продажу|для\s+продажи|под\s+продажу|под\s+перепродажу)/i.test(msg)) {
     update.isForResale = true;
   }
   if (/(?:юрлиц|юр\.\s*лиц|для\s+компании|(?<![а-яёА-ЯЁa-zA-Z0-9])ооо(?![а-яёА-ЯЁa-zA-Z0-9])|(?<![а-яёА-ЯЁa-zA-Z0-9])ип(?![а-яёА-ЯЁa-zA-Z0-9]))/i.test(msg)) {
     update.isLegalEntity = true;
   } else if (/(?:физлиц|физ\.\s*лиц)/i.test(msg)) {
     update.isLegalEntity = false;
+    // "физлицо" (individual person) implies personal use, not resale
+    update.isForResale = false;
   }
 
   // ── C) Auction grade parsing ──
@@ -1447,7 +1906,8 @@ function extractStateUpdate(
   }
 
   // ── F) Intent parsing ──
-  if (/(?:посчитай|можешь\s+посчитать|расч[её]т|под\s+ключ\s+сколько|сколько\s+будет\s+стоить)/i.test(msg)) {
+  // "считай", "рассчитай", "посчитай", "можешь посчитать", "расчёт", "под ключ сколько", etc.
+  if (/(?:посчитай|рассчитай|считай|можешь\s+посчитать|расч[её]т|под\s+ключ\s+сколько|сколько\s+будет\s+стоить|сколько\s+стоит|сколько\s+выйдет|почем|почём|во\s+сколько)/i.test(msg)) {
     update.activeIntent = "price_calc";
   } else if (/(?:что\s+значит|чем\s+(?:\d|R|RA)\S*\s+отличается|что\s+такое\s+(?:оценка|аукцион)|расскажи\s+про\s+оценк)/i.test(msg)) {
     update.activeIntent = "auction_explanation";
@@ -1459,39 +1919,87 @@ function extractStateUpdate(
   }
 
   // ── Budget parsing ──
-  const budgetMatch = msg.match(/(?:бюджет|до)\s+([\d.,]+\s*(?:тыс|тысяч|к|млн|миллион|\d)?[^\n,]*)/i);
-  if (budgetMatch) {
-    update.budgetText = budgetMatch[0];
+  // Detect "don't know the budget" / "show me approximate prices" FIRST
+  // Note: не\s*знаю (optional space) matches both "не знаю" and "незнаю" (common typo).
+  // "средн* стоимост*" / "как* стоимост*" match all declensions of price inquiry phrases.
+  // Extended coverage: "прицениться", "по нормальной цене", "хз по бюджету", "фиг знает" etc.
+  const BUDGET_UNKNOWN_RE = /(?:бюджет[а-яё]*\s+не\s*знаю|не\s*знаю\s+бюджет[а-яё]*|цен[а-яё]*\s+не\s*знаю|не\s*знаю\s+цен|дай\s+примерн|засвети\s+(?:стоимост|бюджет|цен)|покажи\s+стоимост|сориентируй|дай\s+вилку|примерн[а-яё]*\s+(?:бюджет|стоимост|цен)|ориентировочн[а-яё]*\s+(?:бюджет|стоимост|цен)|не\s*знаю\s+сколько|хз\s+(?:по\s+)?(?:бюджет|цен|стоимост)|жду\s+от\s+(?:тебя|вас)\s+цен|дай\s+ценообразовани|дай\s+(?:цен(?:у|ы|ник)|стоимост[а-яё]*)|покажи\s+цен|скажи\s+цен|сколько\s+стоит|не\s*знаю\s+цену|предлагай|средн[а-яё]*\s+(?:стоимост|цен[а-яё]*)|как(?:ая|ой|ое)\s+(?:стоимост|цен[а-яё]*)|прицени(?:ть|сь|тесь)|по\s+(?:нормальн[а-яё]*|рыночн[а-яё]*|адекватн[а-яё]*)\s+(?:цен[а-яё]*|стоимост)|какая\s+вилка|что\s+по\s+(?:ценам|деньгам|стоимости)|во\s+(?:что|сколько)\s+(?:обойд[её]тся|выйдет|встанет)|посчитай\s+по\s+(?:нормальн|средн|рыночн)|назови\s+(?:цену|сумму|стоимость)|фиг\s+(?:его\s+)?знает\s+(?:бюджет|цен|стоимост))/i;
+  if (BUDGET_UNKNOWN_RE.test(msg)) {
+    update.budgetText = "approximate_guidance";
+    update.budgetDeclined = true;
+    // Requesting pricing implies price_calc intent — prevents the bot from
+    // promising a calculation under car_search intent where calc-critical
+    // field checks (volumeCm3, isForResale) are skipped.
+    update.activeIntent = "price_calc";
   }
-  const budgetMatch2 = msg.match(/(?:в\s+пределах)\s+([\d.,]+[^\n,]*)/i);
-  if (budgetMatch2) {
-    update.budgetText = budgetMatch2[0];
+
+  // Context-aware budget decline: bare "незнаю" / "не знаю" / "хз" / "фиг знает" etc.
+  // when bot just asked about budget/price. Robust against all common typos and slang.
+  if (!update.budgetText && previousState.pendingQuestion && /(?:бюджет|цен|стоимост)/i.test(previousState.pendingQuestion)) {
+    if (/^(?:не\s*знаю|незнаю|хз|хуй\s+знает|фиг\s+(?:его\s+)?знает|без\s+понятия|понятия\s+не\s+имею|не\s+в\s+курсе|нз|без\s+бюджета|нет\s+бюджета|сам\s+не\s+знаю|да\s+хз|не\s+определился|не\s+решил[аи]?|предлагай|сориентируй|посоветуй|подскажи)\s*[.!?]?\s*$/i.test(msg.trim())) {
+      update.budgetText = "approximate_guidance";
+      update.budgetDeclined = true;
+      update.activeIntent = "price_calc";
+    }
+  }
+
+  if (!update.budgetText && !update.nonPassableType && !update.ageWindow) {
+    const budgetMatch = msg.match(/(?:бюджет|до)\s+([\d.,]+\s*(?:тыс|тысяч|к|млн|миллион|\d)?[^\n,]*)/i);
+    // Reject matches that contain age-related words: "лет", "год/года/году", or colloquial "-х" suffix (e.g. "до 3-х")
+    const AGE_SUFFIX_RE = /(?:лет|год[ау]?(?![а-яе])|\d\s*-?\s*х(?:\s|$|[.,;!?]))/i;
+    if (budgetMatch && !AGE_SUFFIX_RE.test(budgetMatch[0])) {
+      update.budgetText = budgetMatch[0];
+    }
+  }
+  if (!update.budgetText) {
+    const budgetMatch2 = msg.match(/(?:в\s+пределах)\s+([\d.,]+[^\n,]*)/i);
+    if (budgetMatch2) {
+      update.budgetText = budgetMatch2[0];
+    }
   }
 
   // ── Mileage parsing ──
+  // Standard: "пробег до 100 тысяч"
   const mileageMatch = msg.match(/(?:пробег\s+(?:до|не\s+более|максимум)\s+[\d.,]+\s*(?:тыс|к|км)?[^\n,]*)/i);
   if (mileageMatch) {
     update.mileageText = mileageMatch[0];
   }
+  // Slang: "до сотки пробега" / "до 100к пробега" / "до 100 тысяч км"
+  if (!update.mileageText) {
+    const mileageSlang = msg.match(/(?:до\s+сотки|до\s+сотни)\s*(?:пробег[а-яё]*|км)?/i);
+    if (mileageSlang) {
+      update.mileageText = "до 100 тыс. км";
+    }
+  }
+  if (!update.mileageText) {
+    // "до 100к пробега" / "до 80 тысяч пробег"
+    const mileageKm = msg.match(/до\s+([\d.,]+)\s*(?:к|тыс(?:яч)?)\s*(?:км|пробег[а-яё]*)/i);
+    if (mileageKm) {
+      update.mileageText = `до ${mileageKm[1]} тыс. км`;
+    }
+  }
 
   // ── Volume parsing ──
-  const volumeMatch = msg.match(/(?:объ[её]м(?:ом)?|двигатель|мотор)\s*(?:—|-)?\s*([\d.,]+)\s*(?:л(?:итр)?|куб|см3|cc)/i);
+  // Handle declined forms: объём, объёмом, объёму, двигатель, двигателем, мотор, мотором, движок
+  // Unit suffix is optional when keyword provides context, but number must be in valid volume range
+  const volumeMatch = msg.match(/(?:объ[её]м[а-яё]*|двигател[а-яё]*|мотор[а-яё]*|движ(?:ок|к[а-яё]*))\s*(?:—|-)?\s*([\d.,]+)\s*(?:л(?:итр[а-яё]*)?|куб[а-яё]*|см3|cc)?/i);
   if (volumeMatch) {
     const volStr = volumeMatch[1].replace(",", ".");
     const volNum = parseFloat(volStr);
-    if (volNum > 0 && volNum < 10) {
-      // Likely liters, convert to cm3
+    if (volNum >= 0.6 && volNum < 10) {
+      // Likely liters (0.6L–9.9L), convert to cm3
       update.volumeCm3 = Math.round(volNum * 1000);
-    } else if (volNum >= 100) {
+    } else if (volNum >= 600 && volNum <= 10000) {
+      // Already in cm3 (600–10000)
       update.volumeCm3 = Math.round(volNum);
     }
   }
 
-  // Fallback volume: with unit but no prefix keyword (e.g., "1.5 литра", "1500 куб")
+  // Fallback volume: with unit but no prefix keyword (e.g., "1.5 литра", "1500 кубов")
   if (!update.volumeCm3) {
     // Note: trailing \b removed — JS \b doesn't match Cyrillic word boundaries
-    const volumeFallback = msg.match(/\b([\d]+[.,][\d]+)\s*(?:л(?:итр[аов]?)?)(?:\s|$|[.,])/i)
-      ?? msg.match(/\b(\d{3,5})\s*(?:куб(?:\.\s*см)?|см3|cc)(?:\s|$|[.,])/i);
+    const volumeFallback = msg.match(/\b([\d]+[.,][\d]+)\s*(?:л(?:итр[а-яё]*)?)(?:\s|$|[.,])/i)
+      ?? msg.match(/\b(\d{3,5})\s*(?:куб[а-яё]*(?:\.\s*см)?|см3|cc)(?:\s|$|[.,])/i);
     if (volumeFallback) {
       const volStr = volumeFallback[1].replace(",", ".");
       const volNum = parseFloat(volStr);
@@ -1503,15 +2011,29 @@ function extractStateUpdate(
     }
   }
 
-  // Context-aware: bare number when volume is the pending question
+  // Context-aware: number when volume is the pending question.
+  // Handles short messages like "1.5", "1500", "1.5 литра" when bot just asked about volume.
   if (!update.volumeCm3 && previousState.pendingQuestion && /объ[её]м/i.test(previousState.pendingQuestion)) {
-    const bareVol = msg.match(/^\s*([\d]+[.,]?[\d]*)\s*$/);
+    const bareVol = msg.match(/(?:^|\s)([\d]+[.,]?[\d]*)\s*(?:л(?:итр[а-яё]*)?|куб[а-яё]*|см3|cc)?\s*(?:$|[.,!?])/i);
     if (bareVol) {
       const v = parseFloat(bareVol[1].replace(",", "."));
       if (v > 0 && v < 10) {
         update.volumeCm3 = Math.round(v * 1000);
       } else if (v >= 100 && v <= 10000) {
         update.volumeCm3 = Math.round(v);
+      }
+    }
+  }
+
+  // Volume heuristic: bare decimal after model name (e.g., "камри 2.5", "пробокс 1.5")
+  // Common Russian car market pattern — number after model refers to engine displacement.
+  // Only triggers when a model was matched in this message and number looks like volume (0.6-9.9).
+  if (!update.volumeCm3 && (update.model || update.make)) {
+    const bareDecimal = msg.match(/\b(\d+[.,]\d+)\b/);
+    if (bareDecimal) {
+      const v = parseFloat(bareDecimal[1].replace(",", "."));
+      if (v >= 0.6 && v < 10) {
+        update.volumeCm3 = Math.round(v * 1000);
       }
     }
   }
@@ -1544,8 +2066,8 @@ function extractStateUpdate(
 }
 
 // ── LLM fallback parser (secondary enrichment only) ──────
-const PARSER_SYSTEM_PROMPT = `You are a strict JSON extractor for a Russian car import business.
-Given a user message in Russian (possibly with slang), extract structured car-search filters.
+const PARSER_SYSTEM_PROMPT = `You are a strict JSON extractor for a car import business.
+Given a user message (possibly with slang), extract structured car-search filters.
 Return ONLY valid JSON matching this schema — no markdown, no code fences, no explanation:
 
 {
@@ -1565,6 +2087,7 @@ Return ONLY valid JSON matching this schema — no markdown, no code fences, no 
   "auctionGradesAllowed": string[],
   "mileageText": string | null,
   "budgetText": string | null,
+  "budgetDeclined": boolean,
   "priority": "cheapest" | "best_condition" | "balanced" | null,
   "volumeCm3": number | null,
   "auctionPriceJPY": number | null,
@@ -1597,6 +2120,8 @@ AGE RULES:
 - If non_passable and context says "свежий" or implies new → nonPassableType="under_3_years"
 - If non_passable and context says "старый" or implies old → nonPassableType="over_5_years"
 - If ambiguous which non_passable → nonPassableType=null
+- "до трёх лет" / "до 3 лет" / "младше трёх" / "младше 3" → ageWindow="non_passable", nonPassableType="under_3_years"
+- "старше пяти" / "старше 5" / "от 5 лет" / "от пяти лет" → ageWindow="non_passable", nonPassableType="over_5_years"
 
 FILTER RULES:
 - "передний привод" / "передний" → drivetrain="fwd"
@@ -1606,7 +2131,7 @@ FILTER RULES:
 - "главное дешевле" / "подешевле" / "попроще" → priority="cheapest"
 - "оценка R тоже можно" / "R допустима" → add "R" to auctionGradesAllowed
 - "посчитай" / "посчитать" / "можешь посчитать" → activeIntent="price_calc"
-- "белый" / "чёрный" / "серебристый" etc. → color (in Russian, as the client said it)
+- "белый" / "чёрный" / "серебристый" etc. → color (as the client said it)
 - "2023" / "2024 год" → year (numeric, e.g. 2023)
 - "не больше 4.5" / "минимум 4" → auctionGradeMin (e.g. "4.5", "4")
 - "до 100 тысяч пробег" / "пробег до 80к" → mileageText (as free text, e.g. "до 100 тыс. км")
@@ -1618,6 +2143,15 @@ CALC-CRITICAL FIELDS:
 - "для себя" / "не для перепродажи" → isForResale=false
 - "юрлицо" / "ООО" / "ИП" → isLegalEntity=true
 - "физлицо" / "для себя" → isLegalEntity=false
+
+BUDGET DECLINED RULE:
+- If the user says they don't know the budget, asks for pricing, or requests approximate costs (e.g. "не знаю бюджет", "жду от тебя цену", "сколько стоит", "дай ценообразование", "не знаю цену", "сориентируй по цене") → set budgetDeclined=true and budgetText="approximate_guidance".
+
+⚠️ AGE vs BUDGET DISAMBIGUATION:
+- "до 3 лет", "до трёх лет", "младше трёх", "до 3-х" → ageWindow="non_passable", nonPassableType="under_3_years". This is NEVER budgetText.
+- "до 5 лет", "до пяти лет" → ageWindow="non_passable", nonPassableType="over_5_years". This is NEVER budgetText.
+- "до X тысяч", "до X млн", "бюджет X" → budgetText (budget amount). This is NEVER about age.
+- When in doubt: if the number is small (3, 5) and context is about vehicle age/customs — it is age, NOT budget.
 
 If the message is not about cars at all, return activeIntent="other" with all other fields null/empty.
 Return ONLY the JSON object. No other text.`;
@@ -1662,7 +2196,7 @@ async function extractStateUpdateWithLLM(
       return { set: {}, clearFields: [] };
     }
 
-    const data: OpenRouterResponse = await response.json();
+    const data = (await response.json()) as OpenRouterResponse;
     const raw = data?.choices?.[0]?.message?.content;
     if (typeof raw !== "string" || raw.trim().length === 0) {
       return { set: {}, clearFields: [] };
@@ -1703,6 +2237,7 @@ async function extractStateUpdateWithLLM(
     }
     if (parsed.mileageText) result.mileageText = parsed.mileageText;
     if (parsed.budgetText) result.budgetText = parsed.budgetText;
+    if (parsed.budgetDeclined) result.budgetDeclined = true;
     if (parsed.priority) result.priority = parsed.priority;
     // Calc-critical fields
     if (typeof parsed.volumeCm3 === "number" && parsed.volumeCm3 > 0) {
@@ -1731,7 +2266,7 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 
   const LOCAL_SYSTEM_PROMPT = `
 Ты — Алексей, старший менеджер компании «СпецТехМаш» (Находка / Владивосток).
-Специализация — импорт авто, мото и спецтехники из Японии, Кореи и Китая.
+Специализация — импорт авто, мото и спецтехники из Азии.
 Наши козыри: своя ТЛК «Тихоокеанская Звезда», полный контроль логистики и возврат НДС до 22 % для юрлиц.
 
 ════════════════════════════════════════════
@@ -1746,34 +2281,9 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
   • тип топлива (бензин / дизель / гибрид)
   • комплектация (база / средняя / максималка)
   • аукционная оценка (S/6/5/4.5/4/3.5/3/R/RA)
-  • бюджет
   • прочие ограничения (цвет, руль, опции и т.д.)
 
-Если клиент уже назвал конкретную модель И хотя бы 2 фильтра — НЕ задавай общие вопросы типа «какую машину хотите?», «какой бренд?», «кроссовер или внедорожник?». Сразу подтверди понятые фильтры и задай максимум 1–2 точечных уточняющих вопроса по самым важным недостающим параметрам (диапазон лет, гибрид/бензин, комплектация).
-
-⛔ БЮДЖЕТ У КЛИЕНТА НЕ СПРАШИВАЕМ. Вместо этого озвучиваем вилку цены сами — см. блок «ВИЛКА ЦЕНЫ».
-
-════════════════════════════════════════════
-САНКЦИОННЫЕ МАШИНЫ (Япония → РФ, с августа 2023)
-════════════════════════════════════════════
-
-Япония запретила прямой экспорт в РФ для целых категорий машин. Такие машины везём через третьи страны, фрахт выше обычного.
-
-Машина считается САНКЦИОННОЙ, если выполняется ЛЮБОЕ условие:
-  • любой гибрид или электромобиль (независимо от объёма; включая мягкие гибриды и PHEV);
-  • ДВС (бензин/дизель) объёмом БОЛЕЕ 1900 см³;
-  • категория VAN (Alphard, Hiace, Vellfire, Serena, Noah, Voxy, Stepwgn, Elgrand, Odyssey и аналоги — японские минивэны/микроавтобусы/фургоны).
-
-Если машина санкционная — ОБЯЗАТЕЛЬНО предупреди клиента: «Везём через третью страну, поэтому фрахт выше». Не скрывай это.
-
-Мото:
-  • Стоимость мотоцикла > 600 000 ¥ FOB Япония — считается санкционным, фрахт индивидуальный, зови оператора (НЕ пытайся сам назвать цифры).
-
-Когда вызываешь инструмент calculate_vehicle_price:
-  • ВСЕГДА указывай fuelType: "ice" (бензин/дизель) / "hybrid" (любой гибрид) / "electric" (EV);
-  • ВСЕГДА указывай isVan: true для минивэнов/микроавтобусов/фургонов, false для седанов/хэтчей/джипов.
-
-Если ты НЕ уверен в классификации VAN или в том, что машина попадает под санкции — НЕ рассчитывай сам, напиши «уточню у оператора» и зови менеджера. Лучше задержать ответ, чем назвать неправильную цену.
+Если клиент уже назвал конкретную модель И хотя бы 2 фильтра — НЕ задавай общие вопросы типа «какую машину хотите?», «какой бренд?», «кроссовер или внедорожник?». Сразу подтверди понятые фильтры и задай строго 1 точечный уточняющий вопрос — самый важный из недостающих параметров.
 
 ════════════════════════════════════════════
 ЖЁСТКОЕ ПРАВИЛО: НИКОГДА НЕ ТЕРЯЙ МОДЕЛЬ
@@ -1805,9 +2315,9 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 ════════════════════════════════════════════
 
 Если клиент уже указал модель + ≥2 фильтра:
-  • Задавай НЕ БОЛЕЕ 1–2 коротких вопросов по самым важным пробелам (год, свежий/старый непроходной, объём двигателя, комплектация).
-  • НЕ спрашивай: какой тип кузова, какой бренд, SUV или кроссовер, Япония/Корея/Китай — если модель уже делает это очевидным.
-  • НЕ спрашивай бюджет — сам оценивай вилку цены (см. блок «ВИЛКА ЦЕНЫ»).
+  • Задавай НЕ БОЛЕЕ 1–2 коротких вопросов по самым важным пробелам (год, свежий/старый непроходной, объём двигателя).
+  • НИКОГДА не спрашивай бюджет — бот сам рассчитает диапазон цен по среднерыночным аукционным ценам.
+  • НЕ спрашивай: какой тип кузова, какой бренд, SUV или кроссовер, страну происхождения — если модель уже делает это очевидным.
 
 Если информации совсем мало (нет модели и фильтров менее 2) — тогда да, задавай уточняющие вопросы, но кратко и по делу.
 
@@ -1818,13 +2328,13 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 Если клиент говорит «можешь посчитать» или «посчитай», но не дал достаточно данных для реального расчёта растаможки/под ключ:
   1. НЕ паникуй и НЕ меняй тему.
   2. Подтверди модель и уже понятные фильтры.
-  3. Скажи, что именно ещё нужно ИЗ КЛИЕНТСКИХ параметров (год/возрастное окно, объём двигателя, комплектация, физлицо/юрлицо/перепродажа). Цену клиент НЕ называет — её ты оцениваешь сам.
-  4. Задай 1–2 вопроса строго по недостающим клиентским параметрам.
+  3. Скажи, что именно ещё нужно для расчёта (год, объём двигателя, для кого — физлицо/юрлицо/перепродажа). НИКОГДА не спрашивай бюджет — бот сам рассчитает вилку цен по среднерыночным аукционным ценам.
+  4. Задай 1–2 вопроса строго по недостающим параметрам.
   5. Оставайся на той же модели.
 
 Пример правильной логики для запроса «можешь посчитать везела, не проходного, передний привод, самый простой, оценка R тоже можно»:
   → модель = Honda Vezel, непроходной, FWD, базовая комплектация, R допустима, приоритет — подешевле.
-  → Ответ: подтвердить фильтры, пояснить нюанс оценки R (смотрим аукционник внимательно), спросить только: какой непроходной (свежий до 3 лет или старше 5 лет) и для физлица/юрлица/перепродажи. Бюджет НЕ спрашивать — посчитать вилку цены самому.
+  → Ответ: подтвердить фильтры, пояснить нюанс оценки R (смотрим аукционник внимательно), спросить только: какой непроходной (свежий до 3 лет или старше 5 лет).
 
 ════════════════════════════════════════════
 АУКЦИОННЫЕ ОЦЕНКИ ≠ ГОД ≠ ПОКОЛЕНИЕ ≠ КОМПЛЕКТАЦИЯ
@@ -1884,7 +2394,7 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 • «правый» = правый руль (RHD).
 • «левый» = левый руль (LHD).
 • «аукционник» = аукционный лист.
-• «санкционка» = санкционный автомобиль (объём > 1.9 л и др. ограничения).
+• «санкционка» = автомобиль, запрещённый к прямому экспорту из Японии (ДВС >1.9 л, гибрид, электро). Считается автоматически с фрахтом через третьи страны.
 • «конструктор» = ввоз с разборкой и сборкой на месте.
 • «распил» = ввоз распиленного кузова.
 • «бенз» = бензиновый двигатель.
@@ -1965,7 +2475,7 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 РУЛЬ
 ════════════════════════════════════════════
 
-Япония без уточнения руля = правый руль (JDM). Не переспрашивай.
+Азиатский рынок без уточнения руля = правый руль (JDM). Не переспрашивай.
 
 ════════════════════════════════════════════
 ЗОНА УВЕРЕННОСТИ
@@ -1976,7 +2486,7 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 Старые авто (до ~2008–2009):
 • Не выдумывай стандартный маршрут.
 • Честно скажи про возможные сложности (ЭПТС, СБКТС, утильсбор).
-• Собери: модель, год, двигатель, местонахождение, бюджет.
+• Собери: модель, год, двигатель, местонахождение.
 • Попроси имя и телефон для связи с менеджером.
 • Не подавай предположения как факт.
 
@@ -2010,57 +2520,53 @@ async function chatCompletion(chatId: number, userMessage: string): Promise<stri
 Упоминай площадку только когда это важно для вопроса. 2–3 фразы по делу.
 
 ════════════════════════════════════════════
-САНКЦИОННЫЕ И СПЕЦТЕХНИКА
+САНКЦИИ ЯПОНИИ (с августа 2023) И ФРАХТ
 ════════════════════════════════════════════
 
-Авто санкционное (>1.9 л) или спецтехника: не считай цену, скажи что логистика нестандартная, собери параметры, передай оператору.
+Япония запретила прямой экспорт в Россию:
+  • Все автомобили с ДВС объёмом более 1900 куб. см.
+  • Все гибриды (включая мягкие) и все электромобили.
+  • Часть коммерческого транспорта (фургоны, крупные автобусы).
+
+Такие машины («санкционные») ввозятся только через третьи страны.
+Калькулятор АВТОМАТИЧЕСКИ определяет санкционность и закладывает повышенный фрахт:
+  • 3 500 USD — для легковых автомобилей (sedan, hatchback, compact crossover).
+  • 4 000 USD — для джипов, рамных внедорожников, полноразмерных минивэнов/автобусов класса Toyota Alphard и аналогичных.
+
+Примеры санкционных моделей: Land Cruiser, Crown, RAV4 с мотором >1.9 л, Alphard, Camry 2.5/3.5, все Lexus, крупные Honda/Mazda/Subaru кроссоверы, любой гибрид (Prius, Aqua HV, Vezel HV и т.п.), любой электромобиль (Leaf, bZ4X и т.п.).
+
+Бот рассчитывает санкционный фрахт автоматически — НЕ нужно передавать оператору. Просто покажи результат и поясни, что фрахт увеличен из-за санкций.
+
+════════════════════════════════════════════
+СПЕЦТЕХНИКА
+════════════════════════════════════════════
+
+Спецтехника (экскаваторы, бульдозеры, краны и т.п.): не считай цену, скажи что логистика нестандартная, собери параметры, передай оператору. Санкционные легковые авто (ДВС >1.9 л, гибриды, EV) — считай автоматически с санкционным фрахтом.
 
 ════════════════════════════════════════════
 РАСЧЁТ ОБЫЧНОЙ МАШИНЫ
 ════════════════════════════════════════════
 
-Если просят расчёт: собери КЛИЕНТСКИЕ параметры — тип, объём двигателя, возрастное окно / год, комплектация, для кого авто (физлицо / юрлицо / перепродажа). Цену в йенах клиент НЕ называет: её ты сам оцениваешь как вилку (см. блок «ВИЛКА ЦЕНЫ»). Затем вызови calculate_vehicle_price ДВАЖДЫ — с нижней и верхней границей priceJPY. Результат распиши понятно: «от X ₽ до Y ₽ под ключ», и объясни, чем отличается низ вилки от верха.
+Если просят расчёт: собери тип, объём двигателя, возраст, для кого авто (физлицо / юрлицо / перепродажа) — затем рассчитай по среднерыночным аукционным ценам и дай диапазон стоимости «от ... до ...». Если клиент назвал конкретную цену в йенах — используй её для точного расчёта.
 Лимит скидки — 20 000 ₽, только для закрытия сделки.
 
-════════════════════════════════════════════
-ВИЛКА ЦЕНЫ (клиенту не задаём вопрос про бюджет)
-════════════════════════════════════════════
+ПРАВИЛО: НИКОГДА не спрашивай бюджет. Бот сам предлагает вилку цен по среднерыночным аукционным ценам. Если клиент добровольно называет бюджет или аукционную цену в йенах — используй для точного расчёта.
 
-❗ Бюджет у клиента НЕ спрашиваем. Это твоя работа — оценить диапазон и объяснить, от чего зависит низ и верх.
-
-Алгоритм для любого запроса «посчитай / сколько стоит / какая цена»:
-  1. По модели + поколению + комплектации + возрастному окну оцени ТИПИЧНЫЙ диапазон FOB Япония (аукционная цена в йенах). Опирайся на свой опыт JDM-рынка: например, Harrier 2.5 hybrid максималка проходного возраста — ориентир ~2.6–3.6 млн ¥; Vezel базовая непроходной старше 5 лет — ориентир ~400–800 тыс. ¥; и т.д.
-  2. Вызови calculate_vehicle_price ДВАЖДЫ — с priceJPY = низу и с priceJPY = верху диапазона. Все остальные параметры (volumeCm3, age, fuelType, isVan, isForResale, isLegalEntity) одинаковые в обоих вызовах.
-  3. Ответ клиенту дай так:
-     • «Под ключ ориентир: от <низ ₽> до <верх ₽>.»
-     • «Нижняя цена — это <перечисли факторы: пробег ~100–130 тыс, оценка 3.5–4, базовая комплектация, стандартный цвет, старше по году в рамках окна>.»
-     • «Верхняя — это <факторы: пробег до 50 тыс, оценка 4.5–5, топовая комплектация, редкий/популярный цвет, свежий год в рамках окна, удачная серия/пакет опций>.»
-  4. В конце предложи: «Если назовёте конкретный лот с аукциона — посчитаю точно по нему» (НЕ как требование, а как опцию).
-
-Факторы, которые обычно двигают цену В ПРЕДЕЛАХ одного запроса:
-  • год выпуска внутри возрастного окна (свежее → дороже);
-  • пробег (меньше → дороже);
-  • аукционная оценка (4.5–5 → дороже, 3–3.5 → дешевле, R → дешевле, но читать лист);
-  • комплектация (база vs максималка, пакеты опций — люк, кожа, навигация, премиум-аудио);
-  • цвет (белый/чёрный/серебро — популярные, не сильно двигают цену; редкие цвета — могут и дороже, и дешевле);
-  • поколение / рестайл (дорест vs рест — рест обычно дороже);
-  • площадка аукциона (USS/TAA/CAA/Mirive — немного различаются по средней цене).
-
-Если данных мало для обоснованной оценки (редкая модель, спецтехника, мото > 600 тыс ¥, санкционка с большой неопределённостью) — не выдумывай цифры. Скажи честно: «такое считаю не по шаблону, передам оператору — пришлёт вилку точнее» и зови менеджера.
+ПРАВИЛО: Задавай строго ОДИН уточняющий вопрос за раз — самый важный из оставшихся. Не задавай 2+ вопроса одновременно.
 
 ════════════════════════════════════════════
 ПРИМЕРЫ СТИЛЯ (ориентир тона, не шаблон)
 ════════════════════════════════════════════
 
 Клиент: «Нужен приус проходной, вд, белый, в максималке»
-→ Сразу: Prius, 3–5 лет, 4WD, белый, топ-комплектация, JDM. Не переспрашиваешь руль. Уточняешь: бюджет, поколение (50 или 60).
+→ Сразу: Prius, 3–5 лет, 4WD, белый, топ-комплектация, JDM. Не переспрашиваешь руль. Уточняешь: поколение (50 или 60), объём двигателя.
 
 Клиент: «Хочу 30 приус проходной»
 → Prius 30 — 2009–2015, 11+ лет → не проходной. Предлагаешь Prius 50 или 60.
 
 Клиент: «можешь посчитать везела, не проходного, передний привод, самый простой, оценка R тоже можно»
 → Модель = Honda Vezel, непроходной, FWD, база, R допустима, приоритет — подешевле.
-→ Подтверди фильтры, поясни нюанс R (смотрим аукционник внимательно), спроси только: свежий до 3 лет или старше 5 лет и бюджет.
+→ Подтверди фильтры, поясни нюанс R (смотрим аукционник внимательно), спроси только: свежий до 3 лет или старше 5 лет.
 
 ════════════════════════════════════════════
 ЗАПРЕЩЁННОЕ ПОВЕДЕНИЕ (нарушение = провал)
@@ -2093,8 +2599,8 @@ PARSED INTENT (структурированный разбор)
 • ДОВЕРЯЙ извлечённым полям: model, make, drivetrain, trimLevel, ageWindow, auctionGradesAllowed и др.
 • НЕ переспрашивай то, что уже заполнено (например, если model="Honda Vezel" — работай с Vezel, не спрашивай "какую машину хотите?").
 • НЕ переинтерпретируй модель в абстрактный класс техники.
-• Задавай вопросы ТОЛЬКО по полям, перечисленным в needsClarification, или по критически недостающим данным (бюджет, точный диапазон лет).
-• Если activeIntent="price_calc" но данных для calculate_vehicle_price недостаточно — подтверди фильтры и спроси только недостающее (аукционная цена в йенах, объём двигателя, точный возраст).
+• Задавай вопросы ТОЛЬКО по полям, перечисленным в needsClarification, или по критически недостающим данным (точный диапазон лет, объём двигателя). НИКОГДА не спрашивай бюджет.
+• Если activeIntent="price_calc" но данных для calculate_vehicle_price недостаточно — подтверди фильтры и спроси только недостающее (объём двигателя, точный возраст). НИКОГДА не спрашивай бюджет.
 
 ════════════════════════════════════════════
 ЖЁСТКИЙ ЗАПРЕТ: ЕСЛИ МОДЕЛЬ ИЗВЕСТНА
@@ -2147,17 +2653,27 @@ PARSED INTENT (структурированный разбор)
   }
 
   // Step 3: apply update to persistent state (includes derive, stage transition, pending question)
+  const prevCalcFields = {
+    auctionPriceJPY: mem.state.auctionPriceJPY,
+    volumeCm3: mem.state.volumeCm3,
+    year: mem.state.year,
+    ageWindow: mem.state.ageWindow,
+    nonPassableType: mem.state.nonPassableType,
+    isForResale: mem.state.isForResale,
+    isLegalEntity: mem.state.isLegalEntity,
+  };
   const mergedState = applyStateUpdate(mem.state, combinedUpdate, mergeSource);
   mem.state = mergedState;
 
   // ── Fast-path: deterministic response when parser extracted enough data ──
   // When model is known AND ≥2 filter/preference slots are filled, and we're
-  // still collecting data, use the deterministic response builder directly.
-  // This prevents the LLM from ignoring parsed state and asking generic questions
-  // (the root cause of the "bot is still тупой" production bug).
+  // still collecting data OR ready to calculate, use the deterministic response
+  // builder directly. This prevents the LLM from ignoring parsed state and
+  // asking generic questions, and ensures calculation results are always sent
+  // reliably without depending on the LLM.
   if (
     mergedState.model != null &&
-    (mergedState.stage === "collecting_calc_params" || mergedState.stage === "collecting_filters")
+    (mergedState.stage === "collecting_calc_params" || mergedState.stage === "collecting_filters" || mergedState.stage === "ready_to_calculate")
   ) {
     const filledCount = [
       mergedState.ageWindow != null,
@@ -2177,19 +2693,43 @@ PARSED INTENT (структурированный разбор)
     ].filter(Boolean).length;
 
     if (filledCount >= 2) {
-      console.log(`🔀 Fast-path: deterministic response (${mergedState.make} ${mergedState.model}, ${filledCount} filters)`);
-      console.log("🔍 STATE:", JSON.stringify(mergedState, null, 2));
-      const plan = planReply(mergedState, userMessage);
-      if (buildCalcParamsFromState(mergedState) !== null) {
-        // slots complete — fall through to auto-calc below
-      } else if (mergedState.stage === "collecting_calc_params" && mergedState.needsClarification.length > 0) {
-        // Price calc: use deterministic only while there are fields to clarify
-        return buildSafeFallbackReply(mergedState, plan);
-      } else if (mergedState.stage === "collecting_filters" && mergedState.pendingQuestion !== null && mergedState.needsClarification.length > 0) {
-        // Car search: use deterministic only when there's still something to ask
+      // When all slots are filled (ready_to_calculate), perform auto-calculation
+      // and send the formatted result directly — no LLM call needed.
+      if (mergedState.stage === "ready_to_calculate" && !mergedState.calculationDone) {
+        try {
+          const isRangeMode = mergedState.auctionPriceJPY == null;
+
+          if (isRangeMode) {
+            const rangeParams = buildCalcParamsRange(mergedState);
+            if (rangeParams) {
+              const [lowResult, highResult] = await Promise.all([
+                calculateTurnkeyPrice(rangeParams.low),
+                calculateTurnkeyPrice(rangeParams.high),
+              ]);
+              mergedState.calculationDone = true;
+              mem.state = mergedState;
+              return formatRangeCalcResultReply(mergedState, rangeParams, lowResult, highResult);
+            }
+          } else {
+            const calcParams = buildCalcParamsFromState(mergedState);
+            if (calcParams) {
+              const calcResult = await calculateTurnkeyPrice(calcParams);
+              mergedState.calculationDone = true;
+              mem.state = mergedState;
+              return formatCalcResultReply(mergedState, calcResult);
+            }
+          }
+        } catch (err) {
+          console.error("❌ Fast-path auto-calculate error:", err);
+          // Fall through to LLM path if fast-path calculation fails
+        }
+      }
+
+      if (buildCalcParamsFromState(mergedState) === null) {
+        const plan = planReply(mergedState, userMessage);
         return buildSafeFallbackReply(mergedState, plan);
       }
-      // Nothing left to clarify (needsClarification empty) → fall through to LLM for natural conversation
+      // All calc slots are filled — skip fallback, let auto-calc at line ~2670 run
     }
   }
 
@@ -2226,20 +2766,20 @@ PARSED INTENT (структурированный разбор)
   // Stage-specific instructions with clear known/missing breakdown
   if (mergedState.stage === "collecting_calc_params") {
     const missing: string[] = [];
-    // Бюджет у клиента НЕ спрашиваем: LLM оценивает вилку JPY сам и вызывает калькулятор дважды (low/high).
     if (!mergedState.volumeCm3) missing.push("объём двигателя");
     if (!mergedState.year && !mergedState.ageWindow) missing.push("год или возрастное окно");
     if (mergedState.ageWindow === "non_passable" && !mergedState.nonPassableType) missing.push("уточнить непроходной: свежий (до 3 лет) или старый (5+ лет)");
     if (mergedState.isForResale == null && mergedState.isLegalEntity == null) missing.push("для себя (физлицо) или юрлицо/перепродажа");
     else if (mergedState.isForResale == null) missing.push("для перепродажи или для себя");
     else if (mergedState.isLegalEntity == null) missing.push("физлицо или юрлицо");
+    // Budget is NEVER asked — bot auto-calculates range mode when no explicit price given
 
     stateContextParts.push(
       `\n═══ ИНСТРУКЦИЯ ═══`,
       `Клиент хочет расчёт. Действуй так:`,
       `1. Подтверди КОРОТКО все уже известные фильтры (одним предложением).`,
       missing.length > 0
-        ? `2. Спроси ТОЛЬКО недостающее (максимум 2 вопроса): ${missing.slice(0, 2).join("; ")}.`
+        ? `2. Спроси строго ОДИН вопрос — самый важный: ${missing[0]}.`
         : `2. Все параметры собраны — вызови calculate_vehicle_price.`,
       `3. НЕ задавай НИКАКИХ других вопросов. НЕ предлагай альтернативы.`,
     );
@@ -2275,21 +2815,63 @@ PARSED INTENT (структурированный разбор)
   // ── Auto-calculate when all params are ready ──
   // Use buildCalcParamsFromState directly instead of relying on LLM making the correct tool call
   let autoCalcDone = false;
-  if (mergedState.stage === "ready_to_calculate") {
-    const calcParams = buildCalcParamsFromState(mergedState);
-    if (calcParams) {
-      try {
-        const calcResult = await calculateTurnkeyPrice(calcParams);
-        stateContextParts.push(
-          `\n═══ РЕЗУЛЬТАТ РАСЧЁТА (выполнен автоматически) ═══`,
-          JSON.stringify(calcResult, null, 2),
-          `Распиши этот результат клиенту понятно и красиво по-русски. НЕ вызывай calculate_vehicle_price — расчёт уже сделан.`,
-        );
-        autoCalcDone = true;
-      } catch (err) {
-        console.error("❌ Auto-calculate error:", err);
+  if (mergedState.stage === "ready_to_calculate" && !mergedState.calculationDone) {
+    const isRangeMode = mergedState.auctionPriceJPY == null;
+
+    if (isRangeMode) {
+      // Range calculation: no explicit price — calculate with market price range
+      const rangeParams = buildCalcParamsRange(mergedState);
+      if (rangeParams) {
+        try {
+          const [lowResult, highResult] = await Promise.all([
+            calculateTurnkeyPrice(rangeParams.low),
+            calculateTurnkeyPrice(rangeParams.high),
+          ]);
+          stateContextParts.push(
+            `\n═══ РЕЗУЛЬТАТ РАСЧЁТА ДИАПАЗОНА (выполнен автоматически) ═══`,
+            `Рассчитано по среднерыночным аукционным ценам.`,
+            `Аукционная цена ОТ: ${rangeParams.low.priceJPY.toLocaleString("ru")} йен`,
+            `Результат (нижняя граница):`,
+            JSON.stringify(lowResult, null, 2),
+            `Аукционная цена ДО: ${rangeParams.high.priceJPY.toLocaleString("ru")} йен`,
+            `Результат (верхняя граница):`,
+            JSON.stringify(highResult, null, 2),
+            `Распиши клиенту ДИАПАЗОН стоимости «от ... до ...» понятно и красиво по-русски. Объясни, что точная цена зависит от аукционной стоимости конкретного лота. НЕ вызывай calculate_vehicle_price — расчёт уже сделан. НЕ спрашивай бюджет.`,
+          );
+          autoCalcDone = true;
+          mergedState.calculationDone = true;
+          mem.state = mergedState;
+        } catch (err) {
+          console.error("❌ Auto-calculate range error:", err);
+        }
+      }
+    } else {
+      // Exact calculation with known auction price
+      const calcParams = buildCalcParamsFromState(mergedState);
+      if (calcParams) {
+        try {
+          const calcResult = await calculateTurnkeyPrice(calcParams);
+          stateContextParts.push(
+            `\n═══ РЕЗУЛЬТАТ РАСЧЁТА (выполнен автоматически) ═══`,
+            JSON.stringify(calcResult, null, 2),
+            `Распиши этот результат клиенту понятно и красиво по-русски. НЕ вызывай calculate_vehicle_price — расчёт уже сделан.`,
+          );
+          autoCalcDone = true;
+          mergedState.calculationDone = true;
+          mem.state = mergedState;
+        } catch (err) {
+          console.error("❌ Auto-calculate error:", err);
+        }
       }
     }
+  } else if (mergedState.calculationDone) {
+    // Calculation was already performed — tell LLM to handle follow-up naturally
+    autoCalcDone = true;
+    stateContextParts.push(
+      `\n═══ ИНСТРУКЦИЯ ═══`,
+      `Расчёт стоимости уже был выполнен ранее. НЕ вызывай calculate_vehicle_price повторно.`,
+      `Отвечай на вопросы клиента по существу. Если клиент хочет пересчитать с другими параметрами — скажи, какие именно новые данные нужны.`,
+    );
   }
 
   // Build the state context as a single system message
@@ -2301,11 +2883,22 @@ PARSED INTENT (структурированный разбор)
     });
   }
 
-  // ── Determine if tools should be included ──
-  // Skip tools when auto-calc already produced a result.
-  // Removed activeIntent filter: LLM decides when to call the calculator on its own,
-  // avoiding hallucinated prices when intent is misclassified as "car_search".
-  const includeTools = !autoCalcDone;
+  // Сбрасываем флаг "расчёт уже выполнен", если изменились важные параметры
+  const calcRelevantChanged =
+    mergedState.auctionPriceJPY !== prevCalcFields.auctionPriceJPY ||
+    mergedState.volumeCm3 !== prevCalcFields.volumeCm3 ||
+    mergedState.year !== prevCalcFields.year ||
+    mergedState.ageWindow !== prevCalcFields.ageWindow ||
+    mergedState.nonPassableType !== prevCalcFields.nonPassableType ||
+    mergedState.isForResale !== prevCalcFields.isForResale ||
+    mergedState.isLegalEntity !== prevCalcFields.isLegalEntity;
+
+  if (calcRelevantChanged) {
+    autoCalcDone = false;
+    mergedState.calculationDone = false;
+  }
+
+  const includeTools = mergedState.activeIntent === "price_calc" && !autoCalcDone;
 
   const body: Record<string, unknown> = {
     model: MODEL,
@@ -2378,8 +2971,6 @@ PARSED INTENT (структурированный разбор)
             ageYears?: number;
             isForResale?: boolean;
             isLegalEntity?: boolean;
-            fuelType?: string;
-            isVan?: boolean;
           };
 
           // Validate required numeric params — reject if missing to avoid nonsense calculations
@@ -2399,8 +2990,6 @@ PARSED INTENT (структурированный разбор)
             ageYears: args.ageYears,
             isForResale: args.isForResale ?? false,
             isLegalEntity: args.isLegalEntity ?? false,
-            fuelType: (args.fuelType as CalcParams["fuelType"]) ?? "ice",
-            isVan: args.isVan ?? false,
           };
 
           const result = await calculateTurnkeyPrice(calcParams);
@@ -2487,7 +3076,7 @@ async function getAIResponse(chatId: number, userMessage: string): Promise<strin
     ) {
       console.warn("⚠️ Reply contradicts parsed state — using deterministic fallback");
       const plan = planReply(mem.state, userMessage);
-      reply = buildSafeFallbackReply(mem.state, plan);
+      reply = await buildSafeFallbackReply(mem.state, plan);
     }
 
     // Phase 7.6.5 — append a pre-filled web-calculator link on calc-related
@@ -2537,8 +3126,21 @@ async function getAIResponse(chatId: number, userMessage: string): Promise<strin
   }
 }
 
-// ── Bot setup ────────────────────────────────────────────
-const bot = new Telegraf(token);
+// ── Test exports (used by regression tests) ──
+export {
+  extractStateUpdate as _test_extractStateUpdate,
+  applyStateUpdate as _test_applyStateUpdate,
+  buildSafeFallbackReply as _test_buildSafeFallbackReply,
+  planReply as _test_planReply,
+  getMissingCalcCriticalFields as _test_getMissingCalcCriticalFields,
+  hasAllCalcCriticalFields as _test_hasAllCalcCriticalFields,
+  DEFAULT_CONVERSATION_STATE as _test_DEFAULT_CONVERSATION_STATE,
+};
+export type { ConversationState as _test_ConversationState };
+
+// ── Bot setup (skip in test mode) ────────────────────────
+if (!isTestMode) {
+const bot = new Telegraf(token!);
 
 // /start command — Alexey greets the user
 bot.start(async (ctx) => {
@@ -2601,3 +3203,4 @@ bot.launch().then(() => {
 // Graceful shutdown
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
+} // end if (!isTestMode)
