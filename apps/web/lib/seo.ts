@@ -100,6 +100,27 @@ export function websiteJsonLd(): JsonLd {
   };
 }
 
+export interface FaqItem {
+  question: string;
+  answer: string;
+}
+
+/** FAQPage schema for pages with a visible FAQ block. */
+export function faqJsonLd(items: FaqItem[]): JsonLd {
+  return {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: items.map((item) => ({
+      "@type": "Question",
+      name: item.question,
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: item.answer,
+      },
+    })),
+  };
+}
+
 export interface BreadcrumbItem {
   /** Visible label. */
   name: string;
