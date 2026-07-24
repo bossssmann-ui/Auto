@@ -1,5 +1,11 @@
 # 🚀 Деплой backend-сервера на VPS (Ubuntu, Reg.ru)
 
+> ⚠️ **Этот документ описывает legacy-стек** (Express lead-API для старого
+> Vite SPA). **Актуальный production-сайт — `apps/web` (Next.js)**: деплой —
+> `npm run build -w @auto/web` + `npm run start -w @auto/web`, чеклист —
+> [`PRODUCTION_CHECKLIST.md`](./PRODUCTION_CHECKLIST.md). Приём заявок на
+> актуальном сайте уже встроен (`/api/lead`), отдельный Express не обязателен.
+
 Пошаговая инструкция по установке и запуску backend-микросервиса для обработки
 заявок с калькулятора на VPS-сервере.
 

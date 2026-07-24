@@ -12,10 +12,12 @@
     "sharp": "^0.35.0"
   },
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
+    "dev": "npm run dev -w @auto/web",
+    "build": "npm run build -w @auto/web",
     "lint": "eslint .",
-    "preview": "vite preview",
+    "dev:legacy": "vite",
+    "build:legacy": "tsc -b && vite build",
+    "preview:legacy": "vite preview",
     "dev:bot": "npm run dev -w @auto/bot",
     "test:bot": "BOT_TEST_MODE=1 tsx apps/bot/src/bot.test.ts && BOT_TEST_MODE=1 tsx apps/bot/src/calculator-link.test.ts"
   },
