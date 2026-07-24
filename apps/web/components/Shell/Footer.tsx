@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { BrandMark } from "@/components/Shell/BrandMark";
-import { SOCIAL_LINKS, TELEGRAM_BOT_USERNAME } from "@/lib/seo";
+import { CONTACTS, SOCIAL_LINKS, TELEGRAM_BOT_USERNAME } from "@/lib/seo";
 
 /**
  * Minimal footer per spec §4.6 rule 2.
@@ -121,15 +121,34 @@ export function Footer() {
                 YouTube
               </a>
             </li>
-            <li>ИП Хмелёв · работаем с физлицами и юрлицами</li>
+            <li>
+              <a
+                href={`tel:${CONTACTS.phoneE164}`}
+                className="text-foreground transition-colors hover:text-muted-foreground"
+              >
+                {CONTACTS.phoneDisplay}
+              </a>{" "}
+              <span className="text-xs">(тел · TG · WhatsApp)</span>
+            </li>
+            <li>
+              <a
+                href={`mailto:${CONTACTS.email}`}
+                className="text-foreground transition-colors hover:text-muted-foreground"
+              >
+                {CONTACTS.email}
+              </a>
+            </li>
           </ul>
         </div>
       </div>
 
       <div className="border-t border-border">
-        <p className="mx-auto max-w-7xl px-6 py-6 text-xs text-muted-foreground lg:px-8">
-          © {new Date().getFullYear()} SpecTechMash / Спецтехмаш. Все права защищены.
-        </p>
+        <div className="mx-auto max-w-7xl space-y-1 px-6 py-6 text-xs text-muted-foreground lg:px-8">
+          <p>
+            ИП Хмелев Р. А. · ИНН {CONTACTS.inn} · ОГРНИП {CONTACTS.ogrnip}
+          </p>
+          <p>© {new Date().getFullYear()} SpecTechMash / Спецтехмаш. Все права защищены.</p>
+        </div>
       </div>
     </footer>
   );
