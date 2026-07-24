@@ -1,9 +1,8 @@
 import type { MetadataRoute } from "next";
 import { listAllCategoryPaths, listAllLotIds } from "@/lib/auction";
+import { SITE_URL } from "@/lib/seo";
 
-const BASE_URL =
-  process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ??
-  "https://example.com";
+const BASE_URL = SITE_URL;
 
 const STATIC_PATHS = [
   "",
