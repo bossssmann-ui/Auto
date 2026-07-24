@@ -103,6 +103,22 @@ export function Footer() {
             </li>
             <li>
               <a
+                href="tel:+79147285880"
+                className="text-foreground transition-colors hover:text-muted-foreground"
+              >
+                +7 914 728-58-80
+              </a>
+            </li>
+            <li>
+              <a
+                href="mailto:bossmann@inbox.ru"
+                className="text-foreground transition-colors hover:text-muted-foreground"
+              >
+                bossmann@inbox.ru
+              </a>
+            </li>
+            <li>
+              <a
                 href={`https://t.me/${TELEGRAM_BOT_USERNAME}`}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -121,15 +137,19 @@ export function Footer() {
                 YouTube
               </a>
             </li>
-            <li>ИП Хмелёв · работаем с физлицами и юрлицами</li>
           </ul>
         </div>
       </div>
 
       <div className="border-t border-border">
-        <p className="mx-auto max-w-7xl px-6 py-6 text-xs text-muted-foreground lg:px-8">
-          © {new Date().getFullYear()} SpecTechMash / Спецтехмаш. Все права защищены.
-        </p>
+        <div className="mx-auto max-w-7xl px-6 py-6 lg:px-8">
+          <p className="text-xs text-muted-foreground">
+            © {new Date().getFullYear()} SpecTechMash / Спецтехмаш. Все права защищены.
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            ИП Хмелев Р.&nbsp;А. · ИНН&nbsp;250816461839 · ОГРНИП&nbsp;322253600061684
+          </p>
+        </div>
       </div>
     </footer>
   );
