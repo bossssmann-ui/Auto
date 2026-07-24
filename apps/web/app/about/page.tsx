@@ -4,9 +4,9 @@ import { BentoTile } from "@/components/BentoTile";
 import { Separator } from "@/components/ui/separator";
 
 export const metadata: Metadata = {
-  title: "О компании — СпецТехМаш · Тихоокеанская Звезда",
+  title: "О компании — SpecTechMash (Спецтехмаш)",
   description:
-    "Импорт авто, мототехники и спецтехники из Японии, Кореи и Китая напрямую с аукционов. Собственная логистика через терминал ТЛК во Владивостоке.",
+    "Импорт авто, мототехники и спецтехники из Японии, Кореи и Китая напрямую с аукционов. Логистика через терминал ТЛК во Владивостоке, доставка по всей России.",
   alternates: { canonical: "/about" },
 };
 
@@ -16,11 +16,11 @@ export default function AboutPage() {
       <div className="mb-10 space-y-3">
         <span className="label">About</span>
         <h1 className="font-display text-[32px] leading-tight font-semibold md:text-[40px] lg:text-[48px]">
-          СпецТехМаш · Тихоокеанская Звезда
+          SpecTechMash · Спецтехмаш
         </h1>
         <p className="max-w-2xl text-muted-foreground">
           Мы возим авто, мототехнику и спецтехнику из Японии, Кореи и Китая напрямую с аукционов.
-          Собственная логистика через терминал ТЛК во Владивостоке.
+          Логистика через терминал ТЛК во Владивостоке.
         </p>
       </div>
 

@@ -19,7 +19,7 @@ export const SITE_URL: string = (() => {
     // Intentionally a visibly-broken placeholder so misconfigured prod
     // deploys fail loudly at SEO review (curl / Rich Results Test) instead
     // of silently shipping example.com URLs to search engines. Override
-    // via NEXT_PUBLIC_SITE_URL=https://spectechmash.ru (or similar).
+    // via NEXT_PUBLIC_SITE_URL=https://stm-import.ru (production domain).
     "https://set-site-url.invalid";
   return raw.replace(/\/+$/, "");
 })();
@@ -30,10 +30,10 @@ export const TELEGRAM_BOT_USERNAME: string =
 
 /** Company identity — reused by JSON-LD and OG defaults. */
 export const ORG = {
-  name: "СпецТехМаш",
-  legalName: "СпецТехМаш · Тихоокеанская Звезда",
+  name: "SpecTechMash",
+  legalName: "ИП Хмелёв",
   description:
-    "Импорт авто, мототехники и спецтехники из Японии, Кореи и Китая с аукционов. Расчёт под ключ в рублях, собственная логистика через ТЛК.",
+    "SpecTechMash (Спецтехмаш) — импорт авто, мототехники и спецтехники из Японии, Кореи и Китая с аукционов. Расчёт под ключ в рублях, доставка по всей России через Владивосток.",
   logoPath: "/favicon.ico",
   inLanguage: "ru-RU",
 } as const;
