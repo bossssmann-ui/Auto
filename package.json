@@ -17,7 +17,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "dev:bot": "npm run dev -w @auto/bot",
-    "test:bot": "BOT_TEST_MODE=1 tsx server/bot.test.ts"
+    "test:bot": "BOT_TEST_MODE=1 tsx apps/bot/src/bot.test.ts && BOT_TEST_MODE=1 tsx apps/bot/src/calculator-link.test.ts"
   },
   "dependencies": {
     "cors": "^2.8.6",

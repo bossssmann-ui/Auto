@@ -234,9 +234,10 @@ console.log("\n═══ Price-range encoding ═══");
 console.log("\n═══ Round-trip with web decoder ═══");
 
 {
-  // Lazy import so test file stays runnable from the apps/bot dir alone.
+  // Lazy import, resolved relative to this file so the test runs from any
+  // working directory (a previous version hardcoded a CI checkout path).
   const { decodeCalculatorState } = await import(
-    "/home/runner/work/Auto/Auto/apps/web/lib/calculator-url.ts"
+    new URL("../../web/lib/calculator-url.ts", import.meta.url).href
   );
 
   const link = buildCalculatorLink(
