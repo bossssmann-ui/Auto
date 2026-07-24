@@ -10,6 +10,10 @@ const STATIC_PATHS = [
   "/calculator",
   "/about",
   "/contacts",
+  "/import-auto-japan",
+  "/import-special-machinery",
+  "/delivery",
+  "/customs",
 ];
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
