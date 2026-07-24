@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BrandMark } from "@/components/Shell/BrandMark";
 import { SOCIAL_LINKS, TELEGRAM_BOT_USERNAME } from "@/lib/seo";
 
 /**
@@ -12,7 +13,9 @@ export function Footer() {
     <footer className="border-t border-border bg-background">
       <div className="mx-auto grid w-full max-w-7xl grid-cols-1 gap-10 px-6 py-12 text-sm md:grid-cols-4 lg:px-8">
         <div className="space-y-3">
-          <p className="font-display text-base font-semibold tracking-tight">СпецТехМаш</p>
+          <p>
+            <BrandMark />
+          </p>
           <p className="text-muted-foreground">
             Импорт автомобилей, мототехники и спецтехники из Японии, Кореи и Китая.
             Логистика через терминал ТЛК.

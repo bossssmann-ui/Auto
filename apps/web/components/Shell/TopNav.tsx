@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import * as React from "react";
 import { MenuIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { BrandMark } from "@/components/Shell/BrandMark";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import {
@@ -53,8 +54,8 @@ export function TopNav() {
         aria-label="Основная навигация"
         className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between gap-6 px-6 lg:px-8"
       >
-        <Link href="/" className="font-display text-lg font-semibold tracking-tight">
-          СпецТехМаш
+        <Link href="/" aria-label="SpecTechMash — на главную">
+          <BrandMark compact />
         </Link>
 
         <ul className="hidden items-center gap-1 md:flex">
