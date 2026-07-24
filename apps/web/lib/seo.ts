@@ -99,6 +99,44 @@ export function organizationJsonLd(): JsonLd {
   };
 }
 
+/**
+ * AutoDealer (a LocalBusiness subtype) — Yandex/Google local-business schema.
+ *
+ * Only verified facts are emitted: city Владивосток, areaServed RU, real
+ * social profiles. Phone / registration ids are env-driven placeholders
+ * (`NEXT_PUBLIC_CONTACT_PHONE`) and are omitted until configured — never
+ * invented.
+ */
+export function autoDealerJsonLd(): JsonLd {
+  const dealer: JsonLd = {
+    "@context": "https://schema.org",
+    "@type": "AutoDealer",
+    name: ORG.name,
+    alternateName: "Спецтехмаш",
+    legalName: ORG.legalName,
+    url: SITE_URL,
+    description: ORG.description,
+    image: canonicalUrl(ORG.logoPath),
+    areaServed: "RU",
+    address: {
+      "@type": "PostalAddress",
+      addressLocality: "Владивосток",
+      addressCountry: "RU",
+    },
+    priceRange: "₽₽",
+    sameAs: [
+      `https://t.me/${TELEGRAM_BOT_USERNAME}`,
+      SOCIAL_LINKS.youtube,
+      SOCIAL_LINKS.instagram,
+    ],
+  };
+
+  const phone = process.env.NEXT_PUBLIC_CONTACT_PHONE;
+  if (phone) dealer.telephone = phone;
+
+  return dealer;
+}
+
 export function websiteJsonLd(): JsonLd {
   return {
     "@context": "https://schema.org",
