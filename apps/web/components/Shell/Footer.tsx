@@ -1,8 +1,11 @@
 import Link from "next/link";
+import { SOCIAL_LINKS, TELEGRAM_BOT_USERNAME } from "@/lib/seo";
 
 /**
- * Minimal 3-column footer per spec §4.6 rule 2.
+ * Minimal footer per spec §4.6 rule 2.
  * Copy is intentionally specific and technical — no marketing fluff.
+ * Social links: only channels that actually exist (no href="#" stubs);
+ * VK / Telegram-channel appear here once created (PROJECT_PLAN P5-02).
  */
 export function Footer() {
   return (
@@ -95,15 +98,34 @@ export function Footer() {
                 Написать менеджеру
               </Link>
             </li>
-            <li>Telegram-бот для расчёта</li>
-            <li>Юридическое лицо · работаем с физлицами</li>
+            <li>
+              <a
+                href={`https://t.me/${TELEGRAM_BOT_USERNAME}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-foreground transition-colors hover:text-muted-foreground"
+              >
+                Telegram-бот для расчёта
+              </a>
+            </li>
+            <li>
+              <a
+                href={SOCIAL_LINKS.youtube}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-foreground transition-colors hover:text-muted-foreground"
+              >
+                YouTube
+              </a>
+            </li>
+            <li>ИП Хмелёв · работаем с физлицами и юрлицами</li>
           </ul>
         </div>
       </div>
 
       <div className="border-t border-border">
         <p className="mx-auto max-w-7xl px-6 py-6 text-xs text-muted-foreground lg:px-8">
-          © {new Date().getFullYear()} СпецТехМаш · Тихоокеанская Звезда. Все права защищены.
+          © {new Date().getFullYear()} SpecTechMash / Спецтехмаш. Все права защищены.
         </p>
       </div>
     </footer>
