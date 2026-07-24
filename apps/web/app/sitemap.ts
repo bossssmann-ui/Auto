@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { listAllCategoryPaths, listAllLotIds } from "@/lib/auction";
+import { GEO_CITIES } from "@/lib/geo/cities";
 import { SITE_URL } from "@/lib/seo";
 
 const BASE_URL = SITE_URL;
@@ -25,6 +26,15 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     changeFrequency: "weekly",
     priority: p === "" ? 1 : 0.7,
   }));
+
+  for (const city of GEO_CITIES) {
+    entries.push({
+      url: `${BASE_URL}/avto-iz-yaponii/${city.slug}`,
+      lastModified: now,
+      changeFrequency: "monthly",
+      priority: 0.6,
+    });
+  }
 
   for await (const path of listAllCategoryPaths()) {
     const parts = ["/catalog", path.brand];

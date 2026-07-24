@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { JsonLd } from "@/components/JsonLd";
 import { Faq } from "@/components/Faq";
+import { GEO_CITIES } from "@/lib/geo/cities";
 import { breadcrumbJsonLd, type FaqItem } from "@/lib/seo";
 
 export const metadata: Metadata = {
@@ -98,6 +99,28 @@ export default function DeliveryPage() {
             Доставка до вашего города; для отдельных направлений используется ж/д.
           </li>
         </ol>
+      </section>
+
+      <Separator className="my-12" />
+
+      <section>
+        <h2 className="font-display text-xl font-semibold">Доставка по городам</h2>
+        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+          Ориентировочные сроки и тарифы автовоза из Владивостока — на страницах
+          городов:
+        </p>
+        <ul className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-sm">
+          {GEO_CITIES.map((c) => (
+            <li key={c.slug}>
+              <Link
+                href={`/avto-iz-yaponii/${c.slug}`}
+                className="text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {c.name}
+              </Link>
+            </li>
+          ))}
+        </ul>
       </section>
 
       <Faq items={FAQ_ITEMS} />

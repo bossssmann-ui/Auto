@@ -75,6 +75,7 @@ const FUEL_LABELS: Record<CalculatorInput["fuelType"], string> = {
 function buildLeadContext(
   state: CalculatorInput,
   result: CalculatorResult,
+  deliveryCity?: string,
 ): { interest: string; meta: Record<string, string> } {
   const params = [
     VEHICLE_LABELS[state.vehicleType],
@@ -98,12 +99,21 @@ function buildLeadContext(
     meta["Вилка под ключ"] =
       `от ${fmtRub(result.low.finalTotalRub)} до ${fmtRub(result.high.finalTotalRub)}`;
   }
+  if (deliveryCity) meta["Город доставки"] = deliveryCity;
   return { interest: `Расчёт: ${params}`, meta };
 }
 
 type FieldErrors = Partial<Record<keyof CalculatorInput, string>>;
 
-export function TurnkeyCalculator() {
+export interface TurnkeyCalculatorProps {
+  /**
+   * Pre-selected delivery city (geo pages, P3-06): shown next to the result
+   * and attached to the lead request so the manager sees the destination.
+   */
+  deliveryCity?: string;
+}
+
+export function TurnkeyCalculator({ deliveryCity }: TurnkeyCalculatorProps = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -372,7 +382,12 @@ export function TurnkeyCalculator() {
       <div>
         {submitting ? <ResultSkeleton /> : null}
         {!submitting && result ? (
-          <ResultPanel result={result} tgHref={tgHref} state={state} />
+          <ResultPanel
+            result={result}
+            tgHref={tgHref}
+            state={state}
+            deliveryCity={deliveryCity}
+          />
         ) : null}
         {!submitting && !result ? <EmptyResult /> : null}
       </div>
@@ -477,12 +492,14 @@ function ResultPanel({
   result,
   tgHref,
   state,
+  deliveryCity,
 }: {
   result: CalculatorResult;
   tgHref: string;
   state: CalculatorInput;
+  deliveryCity?: string;
 }) {
-  const lead = buildLeadContext(state, result);
+  const lead = buildLeadContext(state, result, deliveryCity);
 
   if (result.requiresOperator) {
     return (
@@ -548,6 +565,13 @@ function ResultPanel({
           Расчёт предварительный — точную смету под конкретный лот подтверждает
           менеджер.
         </p>
+
+        {deliveryCity ? (
+          <p className="text-xs text-muted-foreground">
+            Город доставки: {deliveryCity}. Автовоз от Владивостока считается
+            отдельно — укажем в смете.
+          </p>
+        ) : null}
 
         <div className="flex flex-wrap gap-3">
           <LeadDialog
