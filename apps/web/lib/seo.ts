@@ -46,11 +46,32 @@ export const SOCIAL_LINKS = {
 /** Company identity — reused by JSON-LD and OG defaults. */
 export const ORG = {
   name: "SpecTechMash",
-  legalName: "ИП Хмелёв",
+  legalName: "ИП Хмелев Роман Александрович",
   description:
     "SpecTechMash (Спецтехмаш) — импорт авто, мототехники и спецтехники из Японии, Кореи и Китая с аукционов. Расчёт под ключ в рублях, доставка по всей России через Владивосток.",
   logoPath: "/favicon.ico",
   inLanguage: "ru-RU",
+} as const;
+
+/**
+ * Official public contacts and registration details (issue #119, provided
+ * by the owner). Bank details are deliberately NOT here — they are for
+ * contracts only and must never appear on the site.
+ */
+export const CONTACTS = {
+  /** E.164 for tel:/wa.me/JSON-LD. */
+  phoneE164: "+79147285880",
+  /** Human-readable variant for UI. */
+  phoneDisplay: "+7 914 728-58-80",
+  /** The same number answers Telegram and WhatsApp. */
+  whatsappUrl: "https://wa.me/79147285880",
+  email: "bossmann@inbox.ru",
+  inn: "250816461839",
+  ogrnip: "322253600061684",
+  /** Registration address (public, per owner's instruction). */
+  legalAddress:
+    "692906, Приморский край, г. Находка, ул. Шоссейная, д. 22, кв. 1",
+  pickupPoint: "Терминал ТЛК, Владивосток",
 } as const;
 
 /**
@@ -101,14 +122,12 @@ export function organizationJsonLd(): JsonLd {
 
 /**
  * AutoDealer (a LocalBusiness subtype) — Yandex/Google local-business schema.
- *
- * Only verified facts are emitted: city Владивосток, areaServed RU, real
- * social profiles. Phone / registration ids are env-driven placeholders
- * (`NEXT_PUBLIC_CONTACT_PHONE`) and are omitted until configured — never
- * invented.
+ * Real registration data from `CONTACTS` (issue #119); the schema address
+ * carries city/region/postal code only — the full street address stays on
+ * the contacts page, bank details never appear anywhere.
  */
 export function autoDealerJsonLd(): JsonLd {
-  const dealer: JsonLd = {
+  return {
     "@context": "https://schema.org",
     "@type": "AutoDealer",
     name: ORG.name,
@@ -118,9 +137,13 @@ export function autoDealerJsonLd(): JsonLd {
     description: ORG.description,
     image: canonicalUrl(ORG.logoPath),
     areaServed: "RU",
+    telephone: CONTACTS.phoneE164,
+    email: CONTACTS.email,
     address: {
       "@type": "PostalAddress",
-      addressLocality: "Владивосток",
+      addressLocality: "Находка",
+      addressRegion: "Приморский край",
+      postalCode: "692906",
       addressCountry: "RU",
     },
     priceRange: "₽₽",
@@ -130,11 +153,6 @@ export function autoDealerJsonLd(): JsonLd {
       SOCIAL_LINKS.instagram,
     ],
   };
-
-  const phone = process.env.NEXT_PUBLIC_CONTACT_PHONE;
-  if (phone) dealer.telephone = phone;
-
-  return dealer;
 }
 
 export function websiteJsonLd(): JsonLd {

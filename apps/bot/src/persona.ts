@@ -22,10 +22,11 @@ export const KNOWLEDGE_BASE = {
   company: {
     name: "SpecTechMash",
     brand: "Спецтехмаш",
-    legalForm: "ИП Хмелёв", // {{ОГРНИП/ИНН заполнить}}
+    legalForm: "ИП Хмелев Роман Александрович (ИНН 250816461839, ОГРНИП 322253600061684)",
     cities: ["Владивосток", "Находка"],
     site: "https://stm-import.ru",
-    phone: "{{ТЕЛЕФОН}}",
+    phone: "+7 914 728-58-80 (звонок, Telegram и WhatsApp на этот номер)",
+    email: "bossmann@inbox.ru",
     workingHours: "{{часы работы менеджеров, напр. Пн–Пт 9:00–19:00 (Влд)}}",
     botAvailability: "круглосуточно (бот), менеджер — в рабочее время",
   },
@@ -188,7 +189,7 @@ function renderKnowledge(kb: typeof KNOWLEDGE_BASE): string {
 
   return [
     `КОМПАНИЯ: ${kb.company.name} (${kb.company.brand}), ${kb.company.cities.join(" / ")}.`,
-    `Сайт: ${kb.company.site} · Телефон: ${kb.company.phone} · Время: ${kb.company.workingHours}.`,
+    `Сайт: ${kb.company.site} · Телефон: ${kb.company.phone} · Email: ${kb.company.email} · Время: ${kb.company.workingHours}.`,
     ``,
     `ЧЕМ ЗАНИМАЕМСЯ: ${kb.whatWeDo}`,
     `Аукционы: ${kb.auctions.join(", ")}.`,

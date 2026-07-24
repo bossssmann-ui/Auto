@@ -3,7 +3,7 @@ import { BentoGrid } from "@/components/BentoGrid";
 import { BentoTile } from "@/components/BentoTile";
 import { Button } from "@/components/ui/button";
 import { ContactLeadForm } from "@/components/Lead/ContactLeadForm";
-import { TELEGRAM_BOT_USERNAME } from "@/lib/seo";
+import { CONTACTS, ORG, TELEGRAM_BOT_USERNAME } from "@/lib/seo";
 
 export const metadata: Metadata = {
   title: "Контакты — SpecTechMash (Спецтехмаш)",
@@ -55,11 +55,55 @@ export default function ContactsPage() {
         </BentoTile>
 
         <BentoTile colSpan={4}>
-          <span className="label">Офис</span>
+          <span className="label">Связь напрямую</span>
+          <ul className="mt-4 space-y-2 text-sm">
+            <li>
+              <a href={`tel:${CONTACTS.phoneE164}`} className="font-medium hover:underline">
+                {CONTACTS.phoneDisplay}
+              </a>{" "}
+              <span className="text-muted-foreground">— звонок, Telegram и WhatsApp</span>
+            </li>
+            <li>
+              <a
+                href={CONTACTS.whatsappUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:underline"
+              >
+                Написать в WhatsApp
+              </a>
+            </li>
+            <li>
+              <a href={`mailto:${CONTACTS.email}`} className="hover:underline">
+                {CONTACTS.email}
+              </a>
+            </li>
+          </ul>
           <p className="mt-4 text-sm text-muted-foreground">
-            Владивосток · Приморский край. Терминал ТЛК — точка выдачи и осмотра до отправки
-            автовозом.
+            {CONTACTS.pickupPoint} — точка выдачи и осмотра до отправки автовозом.
           </p>
+        </BentoTile>
+
+        <BentoTile colSpan={4}>
+          <span className="label">Реквизиты</span>
+          <dl className="mt-4 space-y-1.5 text-sm">
+            <div>
+              <dt className="inline text-muted-foreground">Юр. лицо: </dt>
+              <dd className="inline">{ORG.legalName}</dd>
+            </div>
+            <div>
+              <dt className="inline text-muted-foreground">ИНН: </dt>
+              <dd className="inline tabular-nums">{CONTACTS.inn}</dd>
+            </div>
+            <div>
+              <dt className="inline text-muted-foreground">ОГРНИП: </dt>
+              <dd className="inline tabular-nums">{CONTACTS.ogrnip}</dd>
+            </div>
+            <div>
+              <dt className="inline text-muted-foreground">Адрес: </dt>
+              <dd className="inline">{CONTACTS.legalAddress}</dd>
+            </div>
+          </dl>
         </BentoTile>
       </BentoGrid>
     </div>

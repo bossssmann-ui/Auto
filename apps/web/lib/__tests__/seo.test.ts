@@ -71,29 +71,34 @@ describe("organizationJsonLd / websiteJsonLd", () => {
 });
 
 describe("autoDealerJsonLd", () => {
-  it("emits an AutoDealer with RU coverage and a Vladivostok address", () => {
+  it("emits an AutoDealer with RU coverage and a Primorye address", () => {
     const dealer = autoDealerJsonLd();
     expect(dealer["@type"]).toBe("AutoDealer");
     expect(dealer.name).toBe("SpecTechMash");
     expect(dealer.areaServed).toBe("RU");
     const address = dealer.address as {
       "@type": string;
-      addressLocality: string;
+      addressRegion: string;
       addressCountry: string;
     };
     expect(address["@type"]).toBe("PostalAddress");
-    expect(address.addressLocality).toBe("Владивосток");
+    expect(address.addressRegion).toBe("Приморский край");
     expect(address.addressCountry).toBe("RU");
     expect(Array.isArray(dealer.sameAs)).toBe(true);
   });
 
-  it("omits telephone until NEXT_PUBLIC_CONTACT_PHONE is configured", () => {
+  it("carries the official phone and email (issue #119)", () => {
     const dealer = autoDealerJsonLd();
-    if (process.env.NEXT_PUBLIC_CONTACT_PHONE) {
-      expect(dealer.telephone).toBe(process.env.NEXT_PUBLIC_CONTACT_PHONE);
-    } else {
-      expect(dealer.telephone).toBeUndefined();
-    }
+    expect(dealer.telephone).toBe("+79147285880");
+    expect(dealer.email).toBe("bossmann@inbox.ru");
+    const address = dealer.address as { addressLocality: string; postalCode: string };
+    expect(address.addressLocality).toBe("Находка");
+    expect(address.postalCode).toBe("692906");
+  });
+
+  it("never exposes bank details", () => {
+    const json = JSON.stringify(autoDealerJsonLd());
+    expect(json).not.toMatch(/БИК|расч[её]тный|корр|банк/i);
   });
 
   it("never mentions the Pacific Star brand", () => {
