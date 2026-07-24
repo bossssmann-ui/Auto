@@ -141,13 +141,25 @@ test.describe("robots and sitemap", () => {
     expect(body).not.toContain(".invalid");
   });
 
-  test("sitemap.xml has real URLs only", async ({ request }) => {
+  test("sitemap.xml is an index pointing at real-domain shards", async ({ request }) => {
     const res = await request.get("/sitemap.xml");
     expect(res.status()).toBe(200);
     const body = await res.text();
-    expect(body).toContain("https://stm-import.ru/catalog");
+    expect(body).toContain("<sitemapindex");
+    expect(body).toContain("https://stm-import.ru/sitemap/0.xml");
     expect(body).not.toContain("example.com");
     expect(body).not.toContain(".invalid");
+  });
+
+  test("sitemap shard 0 carries the site URLs and no fixture lots", async ({ request }) => {
+    const res = await request.get("/sitemap/0.xml");
+    expect(res.status()).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("https://stm-import.ru/catalog");
+    expect(body).toContain("https://stm-import.ru/avto-iz-yaponii/moskva");
+    // Mock catalog: fixture lots stay out of the sitemap (P2-02/P3-09).
+    expect(body).not.toContain("/lot/");
+    expect(body).not.toContain("example.com");
   });
 
   test("llms.txt is served as text and stays brand-clean", async ({ request }) => {
@@ -156,6 +168,44 @@ test.describe("robots and sitemap", () => {
     const body = await res.text();
     expect(body).toContain("SpecTechMash");
     expect(body).not.toMatch(/Pacific Star|Тихоокеанская Звезда/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5b. Catalog canonicalization and lot 404 (P3-02 / P3-09)
+// ---------------------------------------------------------------------------
+
+test.describe("catalog SEO policy", () => {
+  test.skip(({ isMobile }) => isMobile, "head-level checks, one project is enough");
+
+  test("page 2 gets a self-canonical, not /catalog", async ({ page }) => {
+    await page.goto("/catalog?page=2");
+    const canonical = page.locator('link[rel="canonical"]');
+    await expect(canonical).toHaveAttribute(
+      "href",
+      "https://stm-import.ru/catalog?page=2",
+    );
+  });
+
+  test("facet intersection is noindex,follow", async ({ page }) => {
+    await page.goto("/catalog?brand=toyota&fuelType=hybrid");
+    const robots = page.locator('meta[name="robots"]');
+    await expect(robots).toHaveAttribute("content", /noindex/);
+  });
+
+  test("single facet stays indexable with a self-canonical", async ({ page }) => {
+    await page.goto("/catalog?brand=toyota");
+    const canonical = page.locator('link[rel="canonical"]');
+    await expect(canonical).toHaveAttribute(
+      "href",
+      "https://stm-import.ru/catalog?brand=toyota",
+    );
+    await expect(page.locator('meta[name="robots"][content*="noindex"]')).toHaveCount(0);
+  });
+
+  test("unknown lot returns a real 404, not a soft-404", async ({ request }) => {
+    const res = await request.get("/lot/no-such-lot-000");
+    expect(res.status()).toBe(404);
   });
 });
 

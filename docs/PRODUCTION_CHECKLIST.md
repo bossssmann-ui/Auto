@@ -33,7 +33,7 @@
 
 - [ ] `curl https://stm-import.ru/robots.txt` — только stm-import.ru,
       нет `example.com` / `.invalid`
-- [ ] `curl https://stm-import.ru/sitemap.xml` — реальные URL, каталог и услуги на месте
+- [ ] `curl https://stm-import.ru/sitemap.xml` — индекс ссылается на `/sitemap/0.xml` (+ лот-шарды при реальном фиде); в шардах реальные URL, каталог и услуги на месте
 - [ ] `curl https://stm-import.ru/llms.txt` — 200, бренд корректный
 - [ ] Мобильный вьюпорт (375–430px): меню открывается, все пункты кликабельны
 - [ ] `/contacts`: тестовая заявка доходит в Telegram-чат менеджера

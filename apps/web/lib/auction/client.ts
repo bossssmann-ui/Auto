@@ -121,6 +121,15 @@ export function listAllCategoryPaths(): AsyncIterable<{
 }
 
 /**
+ * True while the catalog runs on bundled mock fixtures (no real feed).
+ * SEO layers use this to keep fixture lots out of the index and the sitemap
+ * (P3-09 / P2-02) until `AUCTION_PROVIDER=http` is configured.
+ */
+export function isMockCatalog(): boolean {
+  return (process.env.AUCTION_PROVIDER ?? "mock").toLowerCase() !== "http";
+}
+
+/**
  * Test-only hook: reset the singleton between test files.
  * Not exported from the barrel.
  */
