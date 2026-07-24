@@ -70,6 +70,21 @@ GET {AUCTION_API_BASE_URL}/lots.json
 Слаги (`brand`, `model`, `generation`) — kebab-case ASCII (`[a-z0-9-]`),
 и должны совпадать между `brands.json` и `lots.json`.
 
+## Контракт фото (`photos`)
+
+- `photos` — массив URL: либо абсолютные `https://…` (рекомендуется, CDN в РФ),
+  либо root-relative пути (`/…`) для файлов из `apps/web/public/`.
+- **Первое фото** — обложка: оно же `thumbnail` в каталоге и OG/JSON-LD image.
+- Рекомендуется 3–8 фото на лот, ширина от 1200px, JPEG/WebP; Next сам отдаст
+  AVIF/WebP нужного размера через `next/image`.
+- Alt-тексты генерируются автоматически: «название, год, тип техники — фото
+  с аукциона» (`lotImageAlt` в `lib/format.ts`) — руками задавать не нужно.
+- Если `photos` пуст — сайт показывает `/lot-placeholder.svg` (fallback);
+  в Product JSON-LD изображение при этом не эмитится.
+- Для абсолютных URL хост должен быть разрешён для `next/image`: задайте
+  `NEXT_PUBLIC_AUCTION_CDN_ORIGIN=https://cdn.ваш-хост.ru` — он попадёт и в
+  `images.remotePatterns`, и в preconnect в `<head>`.
+
 ## Кэширование и отказоустойчивость
 
 - Снапшот фида кэшируется в памяти процесса на 5 минут; параллельные запросы

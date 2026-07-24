@@ -16,7 +16,7 @@
     "grade": 4.5,
     "auction_price_jpy": 1100000,
     "auction_date": "2026-04-10",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "X"
   },
   {
@@ -36,7 +36,7 @@
     "grade": 4.5,
     "auction_price_jpy": 1650000,
     "auction_date": "2026-04-12",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "Z"
   },
   {
@@ -56,7 +56,7 @@
     "grade": 4.5,
     "auction_price_jpy": 3650000,
     "auction_date": "2026-04-11",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "Z Leather Package"
   },
   {
@@ -76,7 +76,7 @@
     "grade": 4,
     "auction_price_jpy": 1650000,
     "auction_date": "2026-04-09",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "Premium"
   },
   {
@@ -96,7 +96,7 @@
     "grade": 4.5,
     "auction_price_jpy": 3950000,
     "auction_date": "2026-04-13",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "Executive Lounge"
   },
   {
@@ -116,7 +116,7 @@
     "grade": 4,
     "auction_price_jpy": 2350000,
     "auction_date": "2026-04-08",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "SC"
   },
   {
@@ -136,7 +136,7 @@
     "grade": 4,
     "auction_price_jpy": 1280000,
     "auction_date": "2026-04-11",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "S Touring"
   },
   {
@@ -156,7 +156,7 @@
     "grade": 4.5,
     "auction_price_jpy": 2450000,
     "auction_date": "2026-04-12",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "G Leather"
   },
   {
@@ -176,7 +176,7 @@
     "grade": 4.5,
     "auction_price_jpy": 4250000,
     "auction_date": "2026-04-10",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "TX-L"
   },
   {
@@ -196,7 +196,7 @@
     "grade": 5,
     "auction_price_jpy": 1420000,
     "auction_date": "2026-04-13",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "e:HEV Home"
   },
   {
@@ -216,7 +216,7 @@
     "grade": 4,
     "auction_price_jpy": 1850000,
     "auction_date": "2026-04-11",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "Highway Star"
   },
   {
@@ -236,7 +236,7 @@
     "grade": 4.5,
     "auction_price_jpy": 1550000,
     "auction_date": "2026-04-10",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "e+ X"
   },
   {
@@ -256,7 +256,7 @@
     "grade": 4,
     "auction_price_jpy": 1950000,
     "auction_date": "2026-04-09",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "Premium"
   },
   {
@@ -276,7 +276,7 @@
     "grade": 4.5,
     "auction_price_jpy": 3850000,
     "auction_date": "2026-04-12",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "450h Version L"
   },
   {
@@ -296,7 +296,7 @@
     "grade": 5,
     "auction_price_jpy": 3950000,
     "auction_date": "2026-04-13",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "350h F Sport"
   },
   {
@@ -316,7 +316,7 @@
     "grade": 4.5,
     "auction_price_jpy": 2100000,
     "auction_date": "2026-04-11",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "XD L Package"
   },
 
@@ -346,7 +346,7 @@
     "engine_cc": 2500,
     "drive": "fwd",
     "auction_price_jpy": 2180000,
-    "photos": ["/lot-placeholder.svg"]
+    "photos": []
   },
 
   {
@@ -366,7 +366,7 @@
     "grade": 5,
     "auction_price_jpy": 920000,
     "auction_date": "2026-04-10",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "Gen 3"
   },
   {
@@ -384,7 +384,7 @@
     "grade": 4,
     "auction_price_jpy": 480000,
     "auction_date": "2026-04-09",
-    "photos": ["/lot-placeholder.svg"]
+    "photos": []
   },
 
   {
@@ -401,7 +401,7 @@
     "drive": "4wd",
     "grade": 4,
     "auction_price_jpy": 5200000,
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "trim": "Custom build",
     "require_human": true,
     "human_reason": "Нестандартная комплектация и спецоборудование — смета только с оператором."
@@ -422,7 +422,7 @@
     "grade": 3.5,
     "auction_price_jpy": 1280000,
     "auction_date": "2026-04-08",
-    "photos": ["/lot-placeholder.svg"],
+    "photos": [],
     "require_human": true,
     "human_reason": "Пониженный grade 3.5 — требуется ручная оценка состояния батареи перед сделкой."
   }

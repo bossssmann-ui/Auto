@@ -54,3 +54,31 @@ export function lotSummary(lot: LotListItem): string {
   if (lot.auctionGrade !== null) bits.push(`grade ${lot.auctionGrade}`);
   return bits.join(" · ");
 }
+
+const BODY_TYPE_LABELS: Record<LotListItem["bodyType"], string> = {
+  sedan: "седан",
+  suv: "внедорожник",
+  wagon: "универсал",
+  van: "микроавтобус",
+  hatchback: "хэтчбек",
+  coupe: "купе",
+  pickup: "пикап",
+  moto: "мотоцикл",
+  special: "спецтехника",
+};
+
+export function bodyTypeLabel(bodyType: LotListItem["bodyType"]): string {
+  return BODY_TYPE_LABELS[bodyType];
+}
+
+/**
+ * SEO-friendly alt text for a lot photo: brand+model (via title), year and
+ * vehicle type, with an optional 1-based photo index for galleries.
+ */
+export function lotImageAlt(
+  lot: Pick<LotListItem, "title" | "year" | "bodyType">,
+  photoIndex?: number,
+): string {
+  const base = `${lot.title}, ${lot.year}, ${bodyTypeLabel(lot.bodyType)} — фото с аукциона`;
+  return photoIndex && photoIndex > 1 ? `${base} (${photoIndex})` : base;
+}

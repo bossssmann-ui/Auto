@@ -21,6 +21,7 @@ import {
   formatKm,
   formatPriceRangeRub,
   fuelLabel,
+  lotImageAlt,
   volumeLabel,
 } from "@/lib/format";
 
@@ -125,15 +126,35 @@ export default async function LotPage({ params }: { params: Promise<Params> }) {
 
       <BentoGrid>
         <BentoTile colSpan={8} rowSpan={2} className="bg-muted p-0">
-          <div className="relative h-full min-h-[360px] w-full overflow-hidden rounded-xl">
-            <Image
-              src={cover}
-              alt={lot.title}
-              fill
-              sizes="(min-width: 1024px) 66vw, 100vw"
-              className="object-cover"
-              priority
-            />
+          <div className="flex h-full flex-col">
+            <div className="relative min-h-[360px] w-full flex-1 overflow-hidden rounded-xl">
+              <Image
+                src={cover}
+                alt={lotImageAlt(lot)}
+                fill
+                sizes="(min-width: 1024px) 66vw, 100vw"
+                className="object-cover"
+                priority
+              />
+            </div>
+            {lot.photos.length > 1 ? (
+              <ul className="grid grid-cols-4 gap-2 p-2 sm:grid-cols-6">
+                {lot.photos.slice(1, 9).map((photo, i) => (
+                  <li
+                    key={photo + i}
+                    className="relative aspect-[4/3] overflow-hidden rounded-lg bg-background/40"
+                  >
+                    <Image
+                      src={photo}
+                      alt={lotImageAlt(lot, i + 2)}
+                      fill
+                      sizes="(min-width: 640px) 11vw, 25vw"
+                      className="object-cover"
+                    />
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </div>
         </BentoTile>
 
