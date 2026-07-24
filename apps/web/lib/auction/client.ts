@@ -3,9 +3,11 @@
  *
  * Rules:
  *   - Components NEVER import `process.env`. This module does.
- *   - `AUCTION_PROVIDER=mock` (default) selects the in-memory mock.
- *   - `AUCTION_PROVIDER=http` + `AUCTION_API_BASE_URL` selects the HTTP stub
- *     (which currently throws `not_implemented`).
+ *   - `AUCTION_PROVIDER=mock` (default) selects the in-memory mock (bundled
+ *     fixtures) — for local dev and tests.
+ *   - `AUCTION_PROVIDER=http` + `AUCTION_API_BASE_URL` selects the JSON-feed
+ *     provider — the production data source. Feed format is documented in
+ *     `lib/auction/README.md`.
  *
  * Reads are wrapped in `unstable_cache` per §6.6 of the spec so identical
  * calls share cache entries within the SSR request. TTLs:
