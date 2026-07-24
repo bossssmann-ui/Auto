@@ -3,6 +3,9 @@
 Монорепозиторий сайта и сервисов Спецтехмаша: импорт техники с аукционов Японии,
 Кореи и Китая с расчётом стоимости под ключ и собственной логистикой через ТЛК.
 
+**Источник правды по плану работ:** [`PROJECT_PLAN.md`](./PROJECT_PLAN.md).
+Перед деплоем: [`docs/PRODUCTION_CHECKLIST.md`](./docs/PRODUCTION_CHECKLIST.md).
+
 ## Структура
 
 ```
@@ -31,6 +34,7 @@ src/                        # Легаси Vite SPA (постепенно зам
 | `npm run build -w @auto/web`           | продакшн-сборка (SSG + ISR, ~70 роутов)        |
 | `npm run lint -w @auto/web`            | ESLint                                         |
 | `npm run test -w @auto/web`            | Vitest (auction-слой, SEO, калькулятор)        |
+| `npm run test:e2e -w @auto/web`        | Playwright smoke (см. `apps/web/README.md`)    |
 
 ### Shared (`@auto/shared`)
 
@@ -41,7 +45,7 @@ src/                        # Легаси Vite SPA (постепенно зам
 ### Bot (`@auto/bot`)
 
 ```bash
-BOT_TEST_MODE=1 npx tsx apps/bot/src/bot.test.ts
+npm run test:bot   # оба bot-теста (bot.test.ts + calculator-link.test.ts)
 ```
 
 ## Архитектурные правила
