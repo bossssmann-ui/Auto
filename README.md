@@ -15,8 +15,13 @@ apps/
 packages/
 └── shared/                 # @auto/shared — общий калькулятор под ключ
 server/                     # HTTP-стек для старой лид-формы (index, lead, amocrm)
-src/                        # Легаси Vite SPA (постепенно замещается apps/web)
+src/                        # ⚠️ Legacy Vite SPA — НЕ деплоить (см. src/README.md)
 ```
+
+**Production-сайт — только `apps/web`.** Legacy SPA в `src/` содержит
+демо-контакты и dev-mode лид-форму; его деплой как production недопустим без
+отдельного решения. Корневые `npm run dev` / `npm run build` собирают
+`apps/web`; legacy доступен через `dev:legacy` / `build:legacy`.
 
 Ключевой инвариант: **один калькулятор на два канала**. Бот и сайт вызывают
 `calculateTurnkeyPrice` из `@auto/shared` — пошлина, утильсбор, фрахт и
