@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { BentoGrid } from "@/components/BentoGrid";
 import { BentoTile } from "@/components/BentoTile";
 import { Button } from "@/components/ui/button";
+import { ContactLeadForm } from "@/components/Lead/ContactLeadForm";
+import { TELEGRAM_BOT_USERNAME } from "@/lib/seo";
 
 export const metadata: Metadata = {
   title: "Контакты — СпецТехМаш",
@@ -29,8 +31,10 @@ export default function ContactsPage() {
           <span className="label">Form</span>
           <h2 className="mt-4 font-display text-2xl font-semibold">Оставить заявку</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            Форма подключится к существующему lead-endpoint в <code className="rounded bg-muted px-1 py-0.5 text-xs">server/</code> в следующей фазе: Telegram-уведомление + amoCRM-контакт/лид.
+            Заполните форму — менеджер перезвонит и ответит на вопросы по подбору,
+            расчёту и доставке.
           </p>
+          <ContactLeadForm source="contacts" className="relative mt-6" />
         </BentoTile>
 
         <BentoTile colSpan={4}>
@@ -39,8 +43,14 @@ export default function ContactsPage() {
           <p className="mt-3 text-sm text-muted-foreground">
             Подбор, расчёт и согласование сделки — всё в Telegram. Бот видит курс ЦБ онлайн.
           </p>
-          <Button variant="outline" size="sm" className="mt-6 w-fit">
-            Открыть бота
+          <Button asChild variant="outline" size="sm" className="mt-6 w-fit">
+            <a
+              href={`https://t.me/${TELEGRAM_BOT_USERNAME}`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Открыть бота
+            </a>
           </Button>
         </BentoTile>
 
