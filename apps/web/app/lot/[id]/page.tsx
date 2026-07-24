@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { JsonLd } from "@/components/JsonLd";
+import { LeadDialog } from "@/components/Lead/LeadDialog";
 import {
   breadcrumbJsonLd,
   ogImageUrl,
@@ -77,6 +78,16 @@ export default async function LotPage({ params }: { params: Promise<Params> }) {
 
   const tgHref = `https://t.me/${TELEGRAM_BOT_USERNAME}?start=lot_${encodeURIComponent(lot.id)}`;
   const cover = lot.photos[0] ?? "/lot-placeholder.svg";
+
+  const leadMeta: Record<string, string> = {
+    "Лот": `#${lot.id}`,
+    "Техника": `${lot.title} (${lot.year})`,
+    "Цена под ключ": lot.requiresOperator
+      ? "по запросу (нужен оператор)"
+      : (formatPriceRangeRub(lot.priceRangeRub) ?? "по запросу"),
+    "Цена на аукционе": formatJpy(lot.auctionPriceJpy),
+    "Страница": `/lot/${lot.id}`,
+  };
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-12 lg:px-8 lg:py-16">
@@ -166,13 +177,19 @@ export default async function LotPage({ params }: { params: Promise<Params> }) {
           </div>
 
           <div className="mt-6 flex flex-wrap gap-3">
-            <Button asChild size="lg">
+            <LeadDialog
+              label="Уточнить наличие / цену"
+              source="lot"
+              defaultInterest={`${lot.title} (${lot.year}), лот #${lot.id}`}
+              meta={leadMeta}
+              title="Уточнить наличие и цену"
+              description="Менеджер проверит лот и пришлёт точную смету. Данные лота прикрепим к заявке."
+              size="lg"
+            />
+            <Button asChild size="lg" variant="outline">
               <a href={tgHref} target="_blank" rel="noopener noreferrer">
                 Открыть в Telegram
               </a>
-            </Button>
-            <Button asChild size="lg" variant="outline">
-              <Link href="/contacts">Связаться с менеджером</Link>
             </Button>
           </div>
         </BentoTile>

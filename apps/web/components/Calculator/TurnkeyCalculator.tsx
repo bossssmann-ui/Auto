@@ -32,6 +32,7 @@ import {
   decodeCalculatorState,
   encodeCalculatorState,
 } from "@/lib/calculator-url";
+import { LeadDialog } from "@/components/Lead/LeadDialog";
 import { isSanctionedVehicle } from "@auto/shared";
 
 // Reasonable defaults that produce a realistic-looking calc on first load.
@@ -52,6 +53,53 @@ const TELEGRAM_BOT_USERNAME =
 
 const RUB = new Intl.NumberFormat("ru-RU");
 const fmtRub = (v: number) => `${RUB.format(v)} ₽`;
+const JPY = new Intl.NumberFormat("ru-RU");
+
+const VEHICLE_LABELS: Record<CalculatorInput["vehicleType"], string> = {
+  car: "легковой",
+  jeep: "внедорожник / SUV",
+  moto: "мотоцикл",
+};
+
+const FUEL_LABELS: Record<CalculatorInput["fuelType"], string> = {
+  ice: "бензин",
+  hybrid: "гибрид",
+  electric: "электро",
+  diesel: "дизель",
+};
+
+/**
+ * Human-readable calculation context attached to a lead so the manager sees
+ * exactly what the visitor calculated (params + resulting range).
+ */
+function buildLeadContext(
+  state: CalculatorInput,
+  result: CalculatorResult,
+): { interest: string; meta: Record<string, string> } {
+  const params = [
+    VEHICLE_LABELS[state.vehicleType],
+    FUEL_LABELS[state.fuelType],
+    state.fuelType === "electric" ? null : `${state.volumeCm3} см³`,
+    `${state.ageYears} лет`,
+    state.isVan ? "van" : null,
+    state.isLegalEntity ? "юрлицо" : null,
+    state.isForResale ? "перепродажа" : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  const meta: Record<string, string> = {
+    "Параметры расчёта": params,
+    "Аукционная цена": `${JPY.format(state.priceJpyLow)}–${JPY.format(state.priceJpyHigh)} ¥`,
+  };
+  if (result.requiresOperator) {
+    meta["Статус расчёта"] = `требуется оператор — ${result.reason}`;
+  } else {
+    meta["Вилка под ключ"] =
+      `от ${fmtRub(result.low.finalTotalRub)} до ${fmtRub(result.high.finalTotalRub)}`;
+  }
+  return { interest: `Расчёт: ${params}`, meta };
+}
 
 type FieldErrors = Partial<Record<keyof CalculatorInput, string>>;
 
@@ -293,7 +341,9 @@ export function TurnkeyCalculator() {
 
       <div>
         {submitting ? <ResultSkeleton /> : null}
-        {!submitting && result ? <ResultPanel result={result} tgHref={tgHref} /> : null}
+        {!submitting && result ? (
+          <ResultPanel result={result} tgHref={tgHref} state={state} />
+        ) : null}
         {!submitting && !result ? <EmptyResult /> : null}
       </div>
     </div>
@@ -396,10 +446,14 @@ function EmptyResult() {
 function ResultPanel({
   result,
   tgHref,
+  state,
 }: {
   result: CalculatorResult;
   tgHref: string;
+  state: CalculatorInput;
 }) {
+  const lead = buildLeadContext(state, result);
+
   if (result.requiresOperator) {
     return (
       <Card>
@@ -408,11 +462,21 @@ function ResultPanel({
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">{result.reason}</p>
-          <Button asChild>
-            <Link href={tgHref} target="_blank" rel="noopener noreferrer">
-              Написать оператору в Telegram
-            </Link>
-          </Button>
+          <div className="flex flex-wrap gap-3">
+            <LeadDialog
+              label="Получить точную смету"
+              source="calculator"
+              defaultInterest={lead.interest}
+              meta={lead.meta}
+              title="Получить точную смету"
+              description="Оператор посчитает этот вариант вручную и свяжется с вами. Параметры расчёта прикрепим к заявке."
+            />
+            <Button asChild variant="outline">
+              <Link href={tgHref} target="_blank" rel="noopener noreferrer">
+                Написать оператору в Telegram
+              </Link>
+            </Button>
+          </div>
         </CardContent>
       </Card>
     );
@@ -450,11 +514,26 @@ function ResultPanel({
           Курсы применены банковские (ЦБ × 1.04 на JPY и USD): JPY {low.appliedRates.JPY.toFixed(4)} ₽ · USD {low.appliedRates.USD.toFixed(2)} ₽ · EUR {low.appliedRates.EUR.toFixed(2)} ₽.
         </p>
 
-        <Button asChild variant="outline">
-          <Link href={tgHref} target="_blank" rel="noopener noreferrer">
-            Уточнить у оператора
-          </Link>
-        </Button>
+        <p className="text-xs text-muted-foreground">
+          Расчёт предварительный — точную смету под конкретный лот подтверждает
+          менеджер.
+        </p>
+
+        <div className="flex flex-wrap gap-3">
+          <LeadDialog
+            label="Получить точную смету"
+            source="calculator"
+            defaultInterest={lead.interest}
+            meta={lead.meta}
+            title="Получить точную смету"
+            description="Менеджер проверит расчёт под конкретный лот и свяжется с вами. Параметры и вилку прикрепим к заявке."
+          />
+          <Button asChild variant="outline">
+            <Link href={tgHref} target="_blank" rel="noopener noreferrer">
+              Уточнить у оператора
+            </Link>
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );
