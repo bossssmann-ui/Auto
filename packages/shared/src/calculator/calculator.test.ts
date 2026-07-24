@@ -16,6 +16,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { calculateTurnkeyPrice } from './index';
+import { __resetCbrRatesCache } from './currency';
 import { isSanctionedVehicle } from './sanctions';
 import type { CalcParams, CalcSuccess } from './types';
 
@@ -34,7 +35,9 @@ const FAKE_CBR_JSON = {
 
 beforeEach(() => {
   // Every test gets a clean fetch stub that returns the same rates. No test
-  // should ever hit the real CBR endpoint.
+  // should ever hit the real CBR endpoint. The rates cache is reset so each
+  // case exercises the full fetch path.
+  __resetCbrRatesCache();
   const ok = {
     ok: true,
     json: async () => FAKE_CBR_JSON,
