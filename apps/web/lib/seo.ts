@@ -28,6 +28,21 @@ export const SITE_URL: string = (() => {
 export const TELEGRAM_BOT_USERNAME: string =
   process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME ?? "spectechmash_bot";
 
+/**
+ * Confirmed public SpecTechMash profiles (source: PROJECT_PLAN.md §1).
+ * VK / Telegram-channel are planned but NOT created yet — they must not
+ * appear here or anywhere on the site until they exist.
+ *
+ * The Instagram profile exists and is listed in `sameAs` (machine-readable
+ * identity), but is intentionally NOT rendered as a visible button: Meta is
+ * designated extremist in RF and a visible link requires a legal disclaimer —
+ * pending an explicit owner decision.
+ */
+export const SOCIAL_LINKS = {
+  youtube: "https://www.youtube.com/@spectehmash",
+  instagram: "https://www.instagram.com/spectehmash",
+} as const;
+
 /** Company identity — reused by JSON-LD and OG defaults. */
 export const ORG = {
   name: "SpecTechMash",
@@ -78,6 +93,8 @@ export function organizationJsonLd(): JsonLd {
     sameAs: [
       // Telegram bot as a primary presence channel.
       `https://t.me/${TELEGRAM_BOT_USERNAME}`,
+      SOCIAL_LINKS.youtube,
+      SOCIAL_LINKS.instagram,
     ],
   };
 }
