@@ -8,6 +8,7 @@
 
 export {
   getLot,
+  isMockCatalog,
   listAllCategoryPaths,
   listAllLotIds,
   listBrands,

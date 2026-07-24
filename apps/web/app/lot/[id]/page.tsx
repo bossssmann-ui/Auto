@@ -15,7 +15,7 @@ import {
   productJsonLd,
   TELEGRAM_BOT_USERNAME,
 } from "@/lib/seo";
-import { getLot, listAllLotIds } from "@/lib/auction";
+import { getLot, isMockCatalog, listAllLotIds } from "@/lib/auction";
 import {
   formatJpy,
   formatKm,
@@ -60,6 +60,10 @@ export async function generateMetadata({
     title,
     description,
     alternates: { canonical },
+    // Fixture lots must not reach the index (P2-02/P3-09): while the catalog
+    // runs on the mock provider, lot pages are noindex and absent from the
+    // sitemap. Flips automatically when AUCTION_PROVIDER=http is configured.
+    ...(isMockCatalog() ? { robots: { index: false, follow: true } } : {}),
     openGraph: {
       type: "website",
       title,

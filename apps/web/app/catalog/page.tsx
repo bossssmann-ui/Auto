@@ -15,13 +15,6 @@ import {
 
 export const revalidate = 3600;
 
-export const metadata: Metadata = {
-  title: "Каталог JDM-лотов — аукционы Японии, Кореи, Китая",
-  description:
-    "Аукционные лоты под ключ: фильтрация по бренду, топливу и окну возраста. Цены в рублях рассчитываются автоматически по курсу ЦБ.",
-  alternates: { canonical: "/catalog" },
-};
-
 interface CatalogPageProps {
   searchParams: Promise<{
     brand?: string;
@@ -43,6 +36,46 @@ function asFuelType(v: string | undefined): FuelType | undefined {
 }
 function asAgeWindow(v: string | undefined): AgeWindow | undefined {
   return v && AGE_WINDOWS.has(v as AgeWindow) ? (v as AgeWindow) : undefined;
+}
+
+/**
+ * Canonical/robots policy for facets and pagination (P3-02):
+ *   - pagination (`?page>=2`) gets a SELF-canonical (with its valid params)
+ *     so page 2+ is not reported as a duplicate of `/catalog`;
+ *   - a single valuable facet (brand OR fuelType OR ageWindow) stays
+ *     indexable with a self-canonical;
+ *   - facet intersections (2+ filters) are `noindex,follow` — crawlable but
+ *     out of the index. This complements robots.txt `Clean-param`, which
+ *     already collapses these URLs for Yandex.
+ * Invalid param values are ignored (not echoed into the canonical).
+ */
+export async function generateMetadata({
+  searchParams,
+}: CatalogPageProps): Promise<Metadata> {
+  const sp = await searchParams;
+  const brand = sp.brand;
+  const fuelType = asFuelType(sp.fuelType);
+  const ageWindow = asAgeWindow(sp.ageWindow);
+  const page = Math.max(1, parseInt(sp.page ?? "1", 10) || 1);
+
+  const facetCount = [brand, fuelType, ageWindow].filter(Boolean).length;
+  const noindex = facetCount >= 2;
+
+  const qs = new URLSearchParams();
+  if (brand) qs.set("brand", brand);
+  if (fuelType) qs.set("fuelType", fuelType);
+  if (ageWindow) qs.set("ageWindow", ageWindow);
+  if (page > 1) qs.set("page", String(page));
+  const canonical = qs.size > 0 ? `/catalog?${qs.toString()}` : "/catalog";
+
+  const pageSuffix = page > 1 ? ` — страница ${page}` : "";
+  return {
+    title: `Каталог JDM-лотов — аукционы Японии, Кореи, Китая${pageSuffix}`,
+    description:
+      "Аукционные лоты под ключ: фильтрация по бренду, топливу и окну возраста. Цены в рублях рассчитываются автоматически по курсу ЦБ.",
+    alternates: { canonical },
+    ...(noindex ? { robots: { index: false, follow: true } } : {}),
+  };
 }
 
 export default async function CatalogPage({ searchParams }: CatalogPageProps) {
