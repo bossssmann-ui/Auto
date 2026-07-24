@@ -42,3 +42,7 @@ next-env.d.ts
 
 # Keep the example env file tracked (real env files stay ignored).
 !.env.example
+
+# Playwright artifacts
+test-results/
+playwright-report/
