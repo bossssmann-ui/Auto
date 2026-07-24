@@ -1,6 +1,32 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { POST } from "@/app/api/calculator/route";
+import { __resetCbrRatesCache } from "@auto/shared";
 import type { CalculatorInput, CalculatorResult } from "@/lib/calculator-schema";
+
+// Deterministic CBR payload so the route tests never depend on the real
+// (slow / sandbox-blocked) CBR mirror. Same synthetic rates as the golden
+// tests in @auto/shared.
+const FAKE_CBR_JSON = {
+  Valute: {
+    JPY: { Value: 0.65, Nominal: 1 },
+    USD: { Value: 95.0, Nominal: 1 },
+    EUR: { Value: 103.0, Nominal: 1 },
+  },
+};
+
+beforeEach(() => {
+  __resetCbrRatesCache();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      ({ ok: true, json: async () => FAKE_CBR_JSON }) as unknown as Response,
+    ),
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 // Minimal Request factory for the Next route handler contract.
 function req(body: unknown): Request {

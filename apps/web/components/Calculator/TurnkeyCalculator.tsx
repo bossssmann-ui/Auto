@@ -112,7 +112,9 @@ export function TurnkeyCalculator() {
   const [result, setResult] = useState<CalculatorResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [shareNotice, setShareNotice] = useState<string | null>(null);
+  const [share, setShare] = useState<
+    { kind: "copied" } | { kind: "manual"; url: string } | null
+  >(null);
 
   // Hydrate from URL once. We only read searchParams on mount — further
   // navigation uses `router.replace` with shallow intent via `scroll:false`.
@@ -136,7 +138,7 @@ export function TurnkeyCalculator() {
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setSubmitError(null);
-    setShareNotice(null);
+    setShare(null);
 
     // Coerce the electric-volume rule so the input being disabled is enough.
     const normalizedState: CalculatorInput = {
@@ -206,11 +208,13 @@ export function TurnkeyCalculator() {
     const url = `${window.location.origin}/calculator?${sp.toString()}`;
     try {
       await navigator.clipboard.writeText(url);
-      setShareNotice("Ссылка скопирована");
+      setShare({ kind: "copied" });
+      setTimeout(() => setShare(null), 3000);
     } catch {
-      setShareNotice(url);
+      // Clipboard API unavailable (http, permissions) — give the visitor a
+      // selectable field instead of a bare URL string.
+      setShare({ kind: "manual", url });
     }
-    setTimeout(() => setShareNotice(null), 3000);
   }
 
   return (
@@ -331,8 +335,34 @@ export function TurnkeyCalculator() {
               <Button type="button" variant="outline" onClick={onShare}>
                 Поделиться расчётом
               </Button>
-              {shareNotice ? (
-                <span className="self-center text-sm text-muted-foreground">{shareNotice}</span>
+            </div>
+
+            <div aria-live="polite">
+              {share?.kind === "copied" ? (
+                <div
+                  role="status"
+                  className="flex items-center gap-2 rounded-lg border border-border bg-muted/60 px-3 py-2 text-sm"
+                >
+                  <span aria-hidden="true">✓</span> Ссылка на расчёт скопирована
+                </div>
+              ) : null}
+              {share?.kind === "manual" ? (
+                <div className="space-y-1.5 rounded-lg border border-border bg-muted/40 p-3">
+                  <label
+                    htmlFor="calc-share-url"
+                    className="text-sm text-muted-foreground"
+                  >
+                    Не удалось скопировать автоматически — выделите и скопируйте
+                    ссылку:
+                  </label>
+                  <Input
+                    id="calc-share-url"
+                    readOnly
+                    value={share.url}
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="font-mono text-xs"
+                  />
+                </div>
               ) : null}
             </div>
           </form>

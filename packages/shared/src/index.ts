@@ -12,4 +12,4 @@ export type {
 } from './calculator/types';
 export { calculateTurnkeyPrice } from './calculator';
 export { isSanctionedVehicle } from './calculator/sanctions';
-export { fetchCbrRates } from './calculator/currency';
+export { fetchCbrRates, __resetCbrRatesCache } from './calculator/currency';
