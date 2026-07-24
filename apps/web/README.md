@@ -34,3 +34,24 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## E2E smoke tests (Playwright)
+
+Ключевые пользовательские пути: desktop-переход главная → каталог → лот,
+мобильное меню (hamburger), валидация формы контактов и Telegram CTA,
+валидация и расчёт калькулятора, robots/sitemap/llms.txt без dev-фолбэков,
+отсутствие console errors на основных страницах.
+
+```bash
+# Полный прогон: Playwright сам соберёт прод-билд и поднимет сервер (порт 3105)
+npm run test:e2e -w @auto/web
+
+# Против уже запущенного сервера (dev или prod)
+PLAYWRIGHT_BASE_URL=http://localhost:3000 npm run test:e2e -w @auto/web
+
+# Разовая установка браузера
+npx playwright install chromium
+```
+
+Секреты не требуются: lead API без Telegram env деградирует безопасно, а
+тесты никогда не отправляют реальную заявку.
